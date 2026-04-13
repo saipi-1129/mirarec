@@ -1,5 +1,5 @@
 .env
-data/nas/
+data/recordings/
 data/config/targets.json
 __pycache__/
 *.pyc

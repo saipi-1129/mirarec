@@ -13,6 +13,6 @@ COPY docker/recorder-entrypoint.sh ./entrypoint.sh
 
 RUN chmod +x recorder_single.sh manage_recordings.sh entrypoint.sh
 
-RUN mkdir -p /app/nas /app/pids /app/config
+RUN mkdir -p /app/data /app/pids /app/config
 
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -40,7 +40,7 @@ def get_db():
     return pymysql.connect(**MYSQL_CONFIG)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
-NAS_DIR = os.environ.get('NAS_DIR', os.path.join(BASE_DIR, '../nas'))
+NAS_DIR = os.environ.get('NAS_DIR', os.path.join(BASE_DIR, '../data'))
 TARGETS_FILE = os.environ.get('TARGETS_FILE', os.path.join(BASE_DIR, 'targets.json'))
 PID_DIR = os.environ.get('PID_DIR', os.path.join(BASE_DIR, '../pids'))
 MANAGER_SCRIPT = os.environ.get('MANAGER_SCRIPT', os.path.join(BASE_DIR, '../manage_recordings.sh'))

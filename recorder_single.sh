@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 CHECK_INTERVAL=30
-OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/nas}"
+OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/data}"
 LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/recorder.log}"
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK_RECORDER:-}"
 

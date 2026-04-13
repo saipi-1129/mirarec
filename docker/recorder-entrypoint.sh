@@ -2,7 +2,7 @@
 # Recorder container entrypoint
 # Environment variables are passed in via docker-compose
 
-export OUTPUT_DIR="${OUTPUT_DIR:-/app/nas}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/app/data}"
 export TARGETS_FILE="${TARGETS_FILE:-/app/config/targets.json}"
 export PID_DIR="${PID_DIR:-/app/pids}"
 export LOG_FILE="${LOG_FILE:-/dev/null}"  # stdout from tee already handles output

@@ -35,7 +35,7 @@ WEB_SERVER_URL = os.environ.get("WEB_SERVER_URL", "http://localhost:3001")
 PUBLIC_URL     = os.environ.get("PUBLIC_URL",     "")
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-NAS_DIR    = os.environ.get("NAS_DIR", os.path.join(BASE_DIR, "nas"))
+NAS_DIR    = os.environ.get("NAS_DIR", os.path.join(BASE_DIR, "data"))
 CLIPS_DIR  = os.path.join(NAS_DIR, "clips")
 LOG_FILE = os.path.join(BASE_DIR, "clip_watcher.log")
 LAST_CHECK_FILE = os.path.join(BASE_DIR, "clip_watcher_last.txt")

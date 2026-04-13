@@ -36,13 +36,13 @@ services:
       MENTAKO_USER_ID: ${MENTAKO_USER_ID:-}
       GUEST_USER_IDS: ${GUEST_USER_IDS:-}
       DISCORD_WEBHOOK_RECORDER: ${DISCORD_WEBHOOK_RECORDER:-}
-      NAS_DIR: /app/nas
+      NAS_DIR: /app/data
       TARGETS_FILE: /app/config/targets.json
       # MANAGER_SCRIPT is not used in Docker mode (recorder container handles this)
       MANAGER_SCRIPT: ""
       PID_DIR: /app/pids
     volumes:
-      - ./data/nas:/app/nas
+      - ./data/recordings:/app/data
       - ./data/config:/app/config
     depends_on:
       mysql:
@@ -55,11 +55,11 @@ services:
     restart: unless-stopped
     environment:
       DISCORD_WEBHOOK_RECORDER: ${DISCORD_WEBHOOK_RECORDER:-}
-      OUTPUT_DIR: /app/nas
+      OUTPUT_DIR: /app/data
       TARGETS_FILE: /app/config/targets.json
       PID_DIR: /app/pids
     volumes:
-      - ./data/nas:/app/nas
+      - ./data/recordings:/app/data
       - ./data/config:/app/config
     depends_on:
       - web
@@ -78,9 +78,9 @@ services:
       PUBLIC_URL: ${PUBLIC_URL}
       MENTAKO_USER_ID: ${MENTAKO_USER_ID:-}
       WEB_SERVER_URL: http://web:3001
-      NAS_DIR: /app/nas
+      NAS_DIR: /app/data
     volumes:
-      - ./data/nas:/app/nas
+      - ./data/recordings:/app/data
     depends_on:
       mysql:
         condition: service_healthy

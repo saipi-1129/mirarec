@@ -12,7 +12,7 @@ WORKDIR /app
 COPY server.py .
 COPY static ./static
 
-RUN mkdir -p /app/nas/clips /app/nas/images /app/nas/transcripts /app/pids /app/config
+RUN mkdir -p /app/data/clips /app/data/images /app/data/transcripts /app/pids /app/config
 
 EXPOSE 3001
 EXPOSE 3002
