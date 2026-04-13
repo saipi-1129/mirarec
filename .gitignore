@@ -1,0 +1,6 @@
+.env
+data/nas/
+data/config/targets.json
+__pycache__/
+*.pyc
+*.log
