@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir pymysql websockets
+
+WORKDIR /app
+
+COPY server.py .
+COPY static ./static
+
+RUN mkdir -p /app/nas/clips /app/nas/images /app/nas/transcripts /app/pids /app/config
+
+EXPOSE 3001
+EXPOSE 3002
+
+CMD ["python3", "-u", "server.py"]

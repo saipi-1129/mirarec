@@ -1,0 +1,18 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    wget \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY recorder_single.sh manage_recordings.sh ./
+COPY docker/recorder-entrypoint.sh ./entrypoint.sh
+
+RUN chmod +x recorder_single.sh manage_recordings.sh entrypoint.sh
+
+RUN mkdir -p /app/nas /app/pids /app/config
+
+ENTRYPOINT ["/app/entrypoint.sh"]

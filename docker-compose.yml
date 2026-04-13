@@ -1,0 +1,89 @@
+services:
+  mysql:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MYSQL_DATABASE}
+      MARIADB_USER: ${MYSQL_USER}
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mariadb", "-u", "${MYSQL_USER}", "-p${MYSQL_PASSWORD}", "-e", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+      - "3002:3002"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      PORT: ${PORT:-3001}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASS: ${ADMIN_PASS}
+      PUBLIC_URL: ${PUBLIC_URL}
+      MENTAKO_USER_ID: ${MENTAKO_USER_ID:-}
+      GUEST_USER_IDS: ${GUEST_USER_IDS:-}
+      DISCORD_WEBHOOK_RECORDER: ${DISCORD_WEBHOOK_RECORDER:-}
+      NAS_DIR: /app/nas
+      TARGETS_FILE: /app/config/targets.json
+      # MANAGER_SCRIPT is not used in Docker mode (recorder container handles this)
+      MANAGER_SCRIPT: ""
+      PID_DIR: /app/pids
+    volumes:
+      - ./data/nas:/app/nas
+      - ./data/config:/app/config
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  recorder:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.recorder
+    restart: unless-stopped
+    environment:
+      DISCORD_WEBHOOK_RECORDER: ${DISCORD_WEBHOOK_RECORDER:-}
+      OUTPUT_DIR: /app/nas
+      TARGETS_FILE: /app/config/targets.json
+      PID_DIR: /app/pids
+    volumes:
+      - ./data/nas:/app/nas
+      - ./data/config:/app/config
+    depends_on:
+      - web
+
+  clip_watcher:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.clip_watcher
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      DISCORD_WEBHOOK: ${DISCORD_WEBHOOK_CLIP:-}
+      PUBLIC_URL: ${PUBLIC_URL}
+      MENTAKO_USER_ID: ${MENTAKO_USER_ID:-}
+      WEB_SERVER_URL: http://web:3001
+      NAS_DIR: /app/nas
+    volumes:
+      - ./data/nas:/app/nas
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

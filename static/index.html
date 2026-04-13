@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0e1a">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
+    <title>MiraRec</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+        :root {
+            --bg: #0a0e1a; --surface: #131829; --surface2: #1a2035; --border: #232a40;
+            --text: #e8eaf0; --text2: #8891b0; --accent: #4f6ef7; --accent2: #3b5ae0;
+            --red: #ef4444; --green: #22c55e;
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); overflow-x:hidden; min-height:100dvh; }
+        .material-symbols-outlined { font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24; vertical-align:middle; }
+
+        /* Login */
+        #login-overlay { position:fixed; inset:0; z-index:200; background:var(--bg); display:flex; align-items:center; justify-content:center; }
+        #login-overlay.hidden { display:none; }
+        .login-box { width:100%; max-width:340px; padding:24px; }
+        .login-box h1 { font-size:24px; font-weight:800; text-align:center; margin-bottom:24px; }
+        .login-box input { width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:15px; margin-bottom:12px; outline:none; }
+        .login-box input:focus { border-color:var(--accent); }
+        .login-box button { width:100%; padding:12px; border-radius:10px; border:none; font-size:15px; font-weight:600; cursor:pointer; }
+        .btn-primary { background:var(--accent); color:#fff; }
+        .btn-ghost { background:transparent; color:var(--text2); border:1px solid var(--border) !important; margin-top:8px; }
+        .login-error { color:var(--red); font-size:13px; margin-bottom:8px; display:none; }
+        .login-divider { text-align:center; color:var(--text2); font-size:12px; margin:12px 0; position:relative; }
+        .login-divider::before,.login-divider::after { content:''; position:absolute; top:50%; width:40%; height:1px; background:var(--border); }
+        .login-divider::before { left:0; } .login-divider::after { right:0; }
+
+        /* Header */
+        .app-header { position:sticky; top:0; z-index:50; background:rgba(10,14,26,.92); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); padding:calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px; display:flex; align-items:center; justify-content:space-between; }
+        .app-header h1 { font-size:18px; font-weight:800; letter-spacing:-0.5px; }
+        .header-actions { display:flex; gap:8px; align-items:center; }
+        .header-btn { background:var(--surface); border:1px solid var(--border); color:var(--text2); border-radius:10px; padding:6px 8px; cursor:pointer; display:flex; align-items:center; }
+
+        /* Tab bar (bottom) */
+        .tab-bar { position:fixed; bottom:0; left:0; right:0; z-index:50; background:var(--surface); border-top:1px solid var(--border); display:flex; padding:6px 0 calc(6px + var(--safe-bottom)); }
+        .tab-item { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; padding:6px 0; cursor:pointer; color:var(--text2); text-decoration:none; font-size:10px; font-weight:600; transition:color .2s; }
+        .tab-item.active { color:var(--accent); }
+        .tab-item .material-symbols-outlined { font-size:22px; }
+
+        /* Content area */
+        .content { padding:12px 12px calc(70px + var(--safe-bottom)); }
+        .view { display:none; }
+        .view.active { display:block; }
+
+        /* Section header */
+        .section-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+        .section-title { font-size:20px; font-weight:800; letter-spacing:-0.3px; }
+        .section-subtitle { font-size:13px; color:var(--text2); margin-top:2px; }
+
+        /* Cards grid */
+        .card-grid { display:flex; flex-direction:column; gap:0; }
+
+        .card { background:transparent; cursor:pointer; transition:opacity .15s; }
+        .card:active { opacity:0.8; }
+        .card-thumb { position:relative; aspect-ratio:16/9; background:var(--surface2); background-size:cover; background-position:center; border-radius:0; }
+        .card-thumb .duration { position:absolute; top:6px; left:6px; background:rgba(0,0,0,.8); color:#fff; font-size:12px; font-weight:700; padding:2px 6px; border-radius:4px; font-variant-numeric:tabular-nums; }
+        .card-thumb .views-badge { position:absolute; bottom:6px; left:6px; background:rgba(0,0,0,.7); color:#fff; font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; }
+        .card-thumb .live-badge { position:absolute; top:6px; left:6px; background:var(--red); color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; display:flex; align-items:center; gap:4px; animation:livePulse 2s infinite; }
+        @keyframes livePulse { 0%,100%{opacity:1;} 50%{opacity:.7;} }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.7} }
+        .card-body { padding:10px 12px 16px; }
+        .card-title { font-size:16px; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-bottom:4px; color:var(--text); }
+        .card-meta { font-size:13px; color:var(--text2); }
+
+        /* Search bar */
+        .search-bar { display:flex; gap:8px; margin-bottom:12px; }
+        .search-input { flex:1; padding:10px 12px 10px 36px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; }
+        .search-input:focus { border-color:var(--accent); }
+        .search-wrap { position:relative; flex:1; }
+        .search-wrap .material-symbols-outlined { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--text2); font-size:20px; pointer-events:none; }
+        .filter-select { padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; max-width:120px; }
+
+        /* Stats bar */
+        .stats-bar { display:flex; gap:8px; margin-bottom:12px; overflow-x:auto; }
+        .stat-chip { display:flex; align-items:center; gap:4px; padding:6px 10px; border-radius:8px; background:var(--surface); border:1px solid var(--border); font-size:12px; color:var(--text2); white-space:nowrap; }
+        .stat-chip strong { color:var(--text); }
+
+        /* Rec list view */
+        .rec-list { display:flex; flex-direction:column; gap:8px; }
+        .rec-row { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--surface); border-radius:10px; cursor:pointer; transition:transform .1s; }
+        .rec-row:active { transform:scale(0.98); }
+        .rec-row-thumb { width:80px; height:45px; border-radius:6px; background:var(--surface2); background-size:cover; background-position:center; flex-shrink:0; position:relative; }
+        .rec-row-thumb .live-badge { position:absolute; top:2px; left:2px; background:var(--red); color:#fff; font-size:8px; font-weight:700; padding:1px 4px; border-radius:3px; animation:pulse 2s infinite; }
+        .rec-row-body { flex:1; min-width:0; }
+        .rec-row-title { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .rec-row-meta { font-size:11px; color:var(--text2); margin-top:2px; }
+        .rec-row .del-rec { background:none; border:none; color:var(--text2); cursor:pointer; padding:4px; border-radius:6px; flex-shrink:0; display:none; }
+        .rec-row:hover .del-rec { display:block; }
+
+        /* Comment panel */
+        .comment-panel { flex-shrink:0; max-height:40vh; display:flex; flex-direction:column; border-top:1px solid var(--border); }
+        .comment-list { flex:1; overflow-y:auto; padding:8px 12px; display:flex; flex-direction:column; gap:6px; }
+        .comment-item { background:var(--surface2); border-radius:8px; padding:8px 10px; }
+        .comment-item-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:2px; }
+        .comment-item-author { font-size:12px; font-weight:600; color:var(--accent); }
+        .comment-item-time { font-size:10px; color:var(--text2); }
+        .comment-item-body { font-size:13px; line-height:1.4; word-break:break-word; }
+        .comment-item-del { background:none; border:none; color:var(--text2); cursor:pointer; font-size:10px; padding:0 4px; }
+        .comment-input-bar { display:flex; gap:6px; padding:8px 12px; border-top:1px solid var(--border); flex-shrink:0; }
+        .comment-input-bar input { flex:1; padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:13px; outline:none; }
+        .comment-input-bar input:first-child { max-width:80px; }
+        .comment-input-bar button { background:var(--accent); border:none; color:#fff; border-radius:8px; padding:6px 10px; cursor:pointer; }
+
+        /* Clip list */
+        .clip-list { display:flex; flex-direction:column; gap:10px; }
+        .clip-card { display:flex; background:var(--surface); border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+        .clip-card-thumb { width:140px; min-height:100px; flex-shrink:0; background:var(--surface2); background-size:cover; background-position:center; cursor:pointer; }
+        @media(min-width:640px) { .clip-card-thumb { width:200px; min-height:130px; } }
+        .clip-card-body { flex:1; padding:12px; display:flex; flex-direction:column; min-width:0; }
+        .clip-card-title { font-size:15px; font-weight:700; margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .clip-card-meta { font-size:12px; color:var(--text2); margin-bottom:auto; }
+        .clip-card-actions { display:flex; gap:0; margin-top:8px; border-top:1px solid var(--border); padding-top:8px; }
+        .clip-action-btn { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; background:none; border:none; color:var(--text2); cursor:pointer; padding:4px 0; font-size:10px; border-radius:6px; transition:color .15s; }
+        .clip-action-btn:hover { color:var(--text); }
+        .clip-action-btn .material-symbols-outlined { font-size:20px; }
+
+        /* Targets */
+        .target-list { display:flex; flex-direction:column; gap:8px; }
+        .target-row { display:flex; align-items:center; gap:12px; padding:12px; background:var(--surface); border-radius:12px; }
+        .target-avatar { width:40px; height:40px; border-radius:50%; background:var(--surface2); overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+        .target-avatar img { width:100%; height:100%; object-fit:cover; }
+        .target-info { flex:1; min-width:0; }
+        .target-name { font-size:14px; font-weight:600; }
+        .target-id { font-size:12px; color:var(--text2); font-family:monospace; }
+        .toggle { position:relative; width:44px; height:24px; background:var(--surface2); border-radius:12px; cursor:pointer; transition:background .2s; border:none; flex-shrink:0; }
+        .toggle.on { background:var(--accent); }
+        .toggle::after { content:''; position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:transform .2s; }
+        .toggle.on::after { transform:translateX(20px); }
+        .target-delete { background:none; border:none; color:var(--text2); cursor:pointer; padding:8px; border-radius:8px; flex-shrink:0; }
+        .target-interval { display:flex; align-items:center; gap:4px; flex-shrink:0; }
+        .target-interval input { width:50px; padding:4px 6px; border-radius:6px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:12px; text-align:center; outline:none; }
+        .target-interval span { font-size:11px; color:var(--text2); }
+
+        /* Add target */
+        .add-target-bar { display:flex; gap:8px; margin-bottom:16px; }
+        .add-target-bar input { flex:1; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:14px; outline:none; }
+        .add-target-bar button { padding:10px 16px; border-radius:10px; background:var(--accent); color:#fff; border:none; font-size:14px; font-weight:600; cursor:pointer; white-space:nowrap; }
+
+        /* Clip View (YouTube-style) */
+        #clip-view { position:fixed; inset:0; z-index:100; background:var(--bg); flex-direction:column; overflow-y:auto; display:none; }
+        #clip-view.open { display:flex; }
+        .cv-header { position:sticky; top:0; z-index:10; display:flex; align-items:center; gap:8px; padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 8px; background:var(--bg); }
+        .cv-back { background:none; border:none; color:var(--text); cursor:pointer; display:flex; align-items:center; padding:4px; border-radius:50%; }
+        .cv-video { width:100%; aspect-ratio:16/9; background:#000; flex-shrink:0; max-height:40vh; }
+        .cv-video video { width:100%; height:100%; object-fit:contain; }
+        .cv-body { padding:12px 16px; }
+        .cv-title { font-size:17px; font-weight:700; line-height:1.3; margin-bottom:6px; }
+        .cv-meta { font-size:13px; color:var(--text2); margin-bottom:14px; }
+        .cv-actions { display:flex; gap:8px; margin-bottom:16px; overflow-x:auto; padding-bottom:4px; }
+        .cv-action-btn { display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 14px; border-radius:20px; background:var(--surface); border:none; color:var(--text); cursor:pointer; font-size:12px; white-space:nowrap; flex-shrink:0; }
+        .cv-action-btn .material-symbols-outlined { font-size:20px; }
+        .cv-comments { border-top:1px solid var(--border); }
+        .cv-comments-header { display:flex; align-items:center; justify-content:space-between; padding:14px 0 12px; cursor:pointer; }
+        .cv-comments-title { font-size:15px; font-weight:700; }
+        .cv-comments-count { font-size:13px; color:var(--text2); }
+        .cv-comments-body { display:none; flex-direction:column; gap:0; }
+        .cv-comments-body.open { display:flex; }
+        .cv-comment-item { padding:10px 0; border-top:1px solid var(--border); }
+        .cv-comment-author { font-size:12px; font-weight:600; color:var(--accent); margin-bottom:2px; }
+        .cv-comment-text { font-size:14px; line-height:1.5; word-break:break-word; }
+        .cv-comment-input { display:flex; gap:8px; padding:12px 0; border-top:1px solid var(--border); }
+        .cv-comment-input input { flex:1; padding:8px 12px; border-radius:20px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:14px; outline:none; }
+        .cv-comment-send { background:var(--accent); border:none; color:#fff; border-radius:50%; width:36px; height:36px; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+
+        /* Video Modal */
+        #video-modal { position:fixed; inset:0; z-index:100; background:#000; flex-direction:column; }
+        #video-modal { display:none !important; }
+        #video-modal.open { display:flex !important; }
+        .modal-top { display:flex; align-items:center; justify-content:space-between; padding:calc(env(safe-area-inset-top, 0px) + 8px) 12px 8px; background:#000; z-index:10; position:relative; }
+        .modal-top-title { font-size:14px; font-weight:600; color:#fff; flex:1; margin:0 8px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .modal-btn { background:rgba(255,255,255,.15); border:none; color:#fff; border-radius:50%; width:36px; height:36px; display:flex; align-items:center; justify-content:center; cursor:pointer; backdrop-filter:blur(4px); flex-shrink:0; }
+        .video-container { flex:1; display:flex; align-items:center; justify-content:center; background:#000; min-height:0; overflow:hidden; position:relative; }
+        .video-container video { width:100%; height:100%; object-fit:contain; transition:transform .3s; }
+        .video-container video.rot90  { width:var(--vc-h); height:var(--vc-w); transform:rotate(90deg); }
+        .video-container video.rot180 { transform:rotate(180deg); }
+        .video-container video.rot270 { width:var(--vc-h); height:var(--vc-w); transform:rotate(270deg); }
+
+        /* Clip controls */
+        .clip-bar { background:var(--surface); border-top:1px solid var(--border); padding:10px 12px calc(10px + var(--safe-bottom)); flex-shrink:0; }
+        .clip-times { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:13px; }
+        .clip-time-badge { display:flex; align-items:center; gap:4px; padding:4px 8px; border-radius:6px; background:var(--surface2); font-family:monospace; font-size:12px; color:var(--text2); }
+        .clip-time-badge.set { background:rgba(79,110,247,.15); color:var(--accent); border:1px solid var(--accent); }
+        .clip-actions { display:flex; gap:8px; }
+        .clip-btn { flex:1; padding:10px; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:4px; transition:transform .1s; }
+        .clip-btn:active { transform:scale(0.97); }
+        .clip-btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+        .clip-btn:disabled { opacity:.4; cursor:default; }
+        .clip-progress { display:none; align-items:center; gap:8px; padding:8px 0; }
+        .clip-progress.show { display:flex; }
+        .clip-spinner { width:20px; height:20px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+
+        /* Logs */
+        .logs-box { background:#0d1117; border-radius:12px; border:1px solid var(--border); padding:12px; overflow:auto; max-height:calc(100dvh - 200px); }
+        .logs-box pre { font-family:'Consolas','Courier New',monospace; font-size:11px; color:#c9d1d9; white-space:pre-wrap; word-break:break-all; line-height:1.6; }
+
+        /* Toast */
+        .toast { position:fixed; top:60px; left:50%; transform:translateX(-50%); background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 20px; border-radius:10px; font-size:13px; font-weight:600; z-index:300; opacity:0; transition:opacity .3s; pointer-events:none; }
+        .toast.show { opacity:1; }
+
+        /* Empty state */
+        .empty-state { text-align:center; padding:40px 20px; color:var(--text2); }
+        .empty-state .material-symbols-outlined { font-size:48px; opacity:.3; margin-bottom:8px; display:block; }
+
+        /* Info panel (transcript + comments tabbed) */
+        .info-panel { flex-shrink:0; height:45vh; display:flex; flex-direction:column; border-top:1px solid var(--border); background:var(--surface); }
+        .info-tabs { display:flex; border-bottom:1px solid var(--border); flex-shrink:0; }
+        .info-tab { flex:1; padding:8px; font-size:12px; font-weight:600; color:var(--text2); background:none; border:none; cursor:pointer; border-bottom:2px solid transparent; transition:color .15s; }
+        .info-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+        .info-toolbar { display:flex; align-items:center; gap:8px; padding:6px 12px; border-bottom:1px solid var(--border); flex-shrink:0; }
+        .info-search { flex:1; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--surface2); color:var(--text); font-size:12px; outline:none; }
+        .info-search:focus { border-color:var(--accent); }
+        .info-status { font-size:11px; color:var(--text2); display:flex; align-items:center; gap:6px; flex-shrink:0; }
+        .highlights-bar { display:flex; gap:6px; padding:6px 12px; border-bottom:1px solid var(--border); flex-shrink:0; overflow-x:auto; }
+        .highlight-chip { display:flex; align-items:center; gap:4px; padding:4px 8px; border-radius:16px; background:rgba(239,68,68,.15); border:1px solid rgba(239,68,68,.3); color:var(--red); font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0; }
+        .highlight-chip:hover { background:rgba(239,68,68,.25); }
+        .info-list { flex:1; overflow-y:auto; padding:6px 8px; display:flex; flex-direction:column; gap:2px; }
+        .info-seg { display:flex; gap:8px; align-items:flex-start; padding:6px 8px; border-radius:6px; cursor:pointer; transition:background .12s; }
+        .info-seg:hover { background:var(--surface2); }
+        .info-seg.active { background:rgba(79,110,247,.15); }
+        .info-seg-time { font-size:11px; font-family:monospace; color:var(--accent); flex-shrink:0; padding-top:1px; min-width:38px; }
+        .info-seg-text { font-size:13px; line-height:1.5; word-break:break-word; }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-overlay">
+    <div class="login-box">
+        <h1>MiraRec</h1>
+        <div class="login-error" id="login-error"></div>
+        <input type="text" id="login-user" placeholder="Username" autocomplete="username">
+        <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password">
+        <button class="btn-primary" id="login-btn">Sign In</button>
+        <div class="login-divider">or</div>
+        <button class="btn-ghost" id="guest-btn">Continue as Guest</button>
+    </div>
+</div>
+
+<!-- Header -->
+<header class="app-header">
+    <h1>MiraRec</h1>
+    <div class="header-actions">
+        <button class="header-btn" id="auth-toggle" title="Account">
+            <span class="material-symbols-outlined" style="font-size:20px">person</span>
+        </button>
+    </div>
+</header>
+
+<!-- Content -->
+<div class="content">
+    <!-- Recordings View -->
+    <div class="view active" id="view-recordings">
+        <div class="stats-bar">
+            <select class="filter-select" id="filter-user">
+                <option value="">All</option>
+            </select>
+            <div class="stat-chip" id="stat-chip-count"><span class="material-symbols-outlined" style="font-size:16px">movie</span><strong id="stat-count">0</strong></div>
+            <div class="stat-chip" id="stat-chip-size"><span class="material-symbols-outlined" style="font-size:16px">sd_storage</span><strong id="stat-size">0 B</strong></div>
+            <div class="stat-chip" id="stat-chip-free"><span class="material-symbols-outlined" style="font-size:16px">cloud</span><strong id="stat-free">-</strong> free</div>
+            <button class="header-btn" id="toggle-view" title="表示切替"><span class="material-symbols-outlined" style="font-size:18px">grid_view</span></button>
+        </div>
+        <div class="rec-list" id="rec-grid"></div>
+    </div>
+
+    <!-- Clips View -->
+    <div class="view" id="view-clips">
+        <div class="section-header">
+            <div>
+                <div class="section-title">Clips</div>
+                <div class="section-subtitle" id="clips-count">0 clips</div>
+            </div>
+            <button id="bulk-delete-btn" onclick="bulkDeleteClips()" style="display:none;align-items:center;gap:4px;padding:6px 12px;background:var(--red,#e53935);color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer"><span class="material-symbols-outlined" style="font-size:16px">delete_sweep</span>全削除</button>
+        </div>
+        <div class="clip-list" id="clips-grid"></div>
+    </div>
+
+    <!-- Targets View -->
+    <div class="view" id="view-targets">
+        <div class="section-header">
+            <div>
+                <div class="section-title">Targets</div>
+                <div class="section-subtitle">Auto-record when live</div>
+            </div>
+        </div>
+        <div class="add-target-bar" id="add-target-section" style="display:none">
+            <input type="text" id="add-target-input" placeholder="User ID">
+            <button id="add-target-btn">Add</button>
+        </div>
+        <div class="target-list" id="target-list"></div>
+    </div>
+
+    <!-- Logs View -->
+    <div class="view" id="view-logs">
+        <div class="section-header">
+            <div class="section-title">Logs</div>
+            <button class="header-btn" id="refresh-logs"><span class="material-symbols-outlined" style="font-size:18px">refresh</span></button>
+        </div>
+        <div class="logs-box"><pre id="logs-content">Loading...</pre></div>
+    </div>
+</div>
+
+<!-- Bottom Tab Bar -->
+<nav class="tab-bar">
+    <a class="tab-item active" data-tab="recordings">
+        <span class="material-symbols-outlined">videocam</span>Rec
+    </a>
+    <a class="tab-item" data-tab="clips">
+        <span class="material-symbols-outlined">content_cut</span>Clips
+    </a>
+    <a class="tab-item" data-tab="targets">
+        <span class="material-symbols-outlined">person_search</span>Targets
+    </a>
+    <a class="tab-item" data-tab="logs" id="tab-logs" style="display:none">
+        <span class="material-symbols-outlined">terminal</span>Logs
+    </a>
+</nav>
+
+<!-- Video Modal -->
+<div id="video-modal">
+    <div class="modal-top">
+        <button class="modal-btn" id="modal-close"><span class="material-symbols-outlined">close</span></button>
+        <span class="modal-top-title" id="modal-title">Video</span>
+        <button class="modal-btn" id="modal-reload" style="display:none" title="最新に更新"><span class="material-symbols-outlined">refresh</span></button>
+        <button class="modal-btn" id="modal-rotate" title="回転"><span class="material-symbols-outlined">screen_rotation</span></button>
+        <button class="modal-btn" id="modal-info" title="文字起こし/コメント"><span class="material-symbols-outlined">subtitles</span></button>
+        <a class="modal-btn" id="modal-download" href="#" download><span class="material-symbols-outlined">download</span></a>
+    </div>
+    <div class="video-container" id="video-container">
+        <video id="modal-video" controls playsinline></video>
+    </div>
+    <div class="clip-bar" id="clip-bar">
+        <div class="clip-times">
+            <span class="clip-time-badge" id="clip-in-badge">IN --:--</span>
+            <span style="color:var(--text2)">-</span>
+            <span class="clip-time-badge" id="clip-out-badge">OUT --:--</span>
+            <span style="flex:1"></span>
+            <span style="font-size:12px;color:var(--text2)" id="clip-duration-label"></span>
+        </div>
+        <div class="clip-actions">
+            <button class="clip-btn" id="btn-in"><span class="material-symbols-outlined" style="font-size:18px">first_page</span>IN</button>
+            <button class="clip-btn" id="btn-out"><span class="material-symbols-outlined" style="font-size:18px">last_page</span>OUT</button>
+            <button class="clip-btn primary" id="btn-clip" disabled><span class="material-symbols-outlined" style="font-size:18px">content_cut</span>Clip</button>
+            <button class="clip-btn" id="btn-speed" style="flex:0;padding:10px 12px;font-family:monospace">1x</button>
+        </div>
+        <div class="clip-progress" id="clip-progress">
+            <div class="clip-spinner"></div>
+            <span style="font-size:13px;color:var(--text2)">Creating clip...</span>
+        </div>
+    </div>
+    <div class="comment-panel" id="comment-panel" style="display:none">
+        <div class="comment-list" id="comment-list"></div>
+        <div class="comment-input-bar">
+            <input type="text" id="comment-author" placeholder="名前" maxlength="50">
+            <input type="text" id="comment-text" placeholder="コメントを入力..." maxlength="500">
+            <button id="comment-send"><span class="material-symbols-outlined" style="font-size:20px">send</span></button>
+        </div>
+    </div>
+    <div class="info-panel" id="info-panel" style="display:none">
+        <div class="info-tabs">
+            <button class="info-tab" data-tab="transcript">文字起こし</button>
+            <button class="info-tab active" data-tab="comments">コメント</button>
+            <button class="info-tab" data-tab="clips">クリップ</button>
+        </div>
+        <div class="info-toolbar">
+            <input type="text" class="info-search" id="info-search" placeholder="検索...">
+            <span class="info-status" id="info-status"></span>
+            <span id="offset-ctrl" style="display:none;align-items:center;gap:2px;flex-shrink:0">
+                <button onclick="adjustOffset(-1)" style="background:var(--surface2);border:none;color:var(--text);padding:2px 6px;border-radius:4px;cursor:pointer;font-size:12px">-1s</button>
+                <span id="offset-label" style="font-size:11px;color:var(--text2);min-width:28px;text-align:center">0s</span>
+                <button onclick="adjustOffset(1)" style="background:var(--surface2);border:none;color:var(--text);padding:2px 6px;border-radius:4px;cursor:pointer;font-size:12px">+1s</button>
+            </span>
+        </div>
+        <div class="highlights-bar" id="highlights-bar" style="display:none"></div>
+        <div class="info-list" id="info-list"></div>
+    </div>
+</div>
+
+<!-- Clip View (YouTube-style) -->
+<div id="clip-view">
+    <div class="cv-header">
+        <button class="cv-back" id="cv-back"><span class="material-symbols-outlined">arrow_back</span></button>
+    </div>
+    <div class="cv-video"><video id="cv-video" controls playsinline></video></div>
+    <div class="cv-body">
+        <div class="cv-title" id="cv-title"></div>
+        <div class="cv-meta" id="cv-meta"></div>
+        <div class="cv-actions" id="cv-actions"></div>
+        <div class="cv-comments">
+            <div class="cv-comments-header" id="cv-comments-header">
+                <div>
+                    <div class="cv-comments-title">コメント <span id="cv-comments-count"></span></div>
+                    <div style="font-size:12px;color:var(--text2);margin-top:2px" id="cv-comment-preview"></div>
+                </div>
+                <span class="material-symbols-outlined cv-comments-chevron" id="cv-comments-chevron">expand_more</span>
+            </div>
+            <div class="cv-comments-body" id="cv-comments-body">
+                <div class="cv-comment-input">
+                    <input type="text" id="cv-comment-author" placeholder="名前" maxlength="50" style="max-width:90px">
+                    <input type="text" id="cv-comment-text" placeholder="コメントを入力..." maxlength="500">
+                    <button class="cv-comment-send" id="cv-comment-send"><span class="material-symbols-outlined" style="font-size:20px">send</span></button>
+                </div>
+                <div id="cv-comment-list"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+// State
+let allRecordings = [], allTargets = [], allClips = [];
+let currentRole = 'guest', currentTab = 'recordings';
+let recViewMode = localStorage.getItem('recViewMode') || 'list';
+let clipIn = null, clipOut = null, currentFilename = '', isClipMode = false;
+let hls = null;
+let tsAutoReload = null;
+
+// Utils
+const esc = t => { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; };
+const fmtSize = b => { if(!b) return '0 B'; const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+' '+s[i]; };
+const fmtDur = s => { if(!s) return ''; const h=Math.floor(s/3600),m=Math.floor(s%3600/60),ss=Math.floor(s%60); return h>0?`${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`:`${m}:${String(ss).padStart(2,'0')}`; };
+const timeAgo = ts => { if(!ts) return ''; const d=Math.floor((Date.now()-ts)/1000); if(d<60) return 'たった今'; if(d<3600) return Math.floor(d/60)+'分前'; if(d<86400) return Math.floor(d/3600)+'時間前'; if(d<2592000) return Math.floor(d/86400)+'日前'; if(d<31536000) return Math.floor(d/2592000)+'ヶ月前'; return Math.floor(d/31536000)+'年前'; };
+const fmtTime = s => { const m=Math.floor(s/60),ss=Math.floor(s%60),ms=Math.floor((s%1)*10); return `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}.${ms}`; };
+const hash = s => { let h=0; for(let i=0;i<s.length;i++) h=s.charCodeAt(i)+((h<<5)-h); return h; };
+const colors = ['#FF6B6B','#4ECDC4','#45B7D1','#96CEB4','#FFEAA7','#DFE6E9','#74B9FF'];
+const getColor = n => colors[Math.abs(hash(n||'x'))%colors.length];
+
+function showToast(msg) {
+    const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'),2000);
+}
+
+// Auth
+async function checkAuth() {
+    try {
+        const r=await fetch('/api/auth/status'); const d=await r.json();
+        currentRole=d.role||'guest';
+        if(!d.authenticated) document.getElementById('login-overlay').classList.remove('hidden');
+        else document.getElementById('login-overlay').classList.add('hidden');
+        applyRole();
+    } catch(e) { document.getElementById('login-overlay').classList.remove('hidden'); }
+}
+
+function applyRole() {
+    const admin = currentRole==='admin';
+    document.getElementById('add-target-section').style.display = admin?'':'none';
+    document.getElementById('tab-logs').style.display = admin?'':'none';
+    document.getElementById('bulk-delete-btn').style.display = admin?'flex':'none';
+    document.querySelector('.stats-bar').style.display = admin?'flex':'none';
+    document.getElementById('clips-count').style.display = admin?'':'none';
+    if(!admin && currentTab==='logs') switchTab('recordings');
+}
+
+async function bulkDeleteClips() {
+    if(!allClips.length) return;
+    if(!confirm(`クリップを全て削除しますか？(${allClips.length}件)`)) return;
+    for(const c of allClips) {
+        await fetch(`/api/clips/${encodeURIComponent(c.filename)}`,{method:'DELETE'});
+    }
+    loadClips();
+    showToast(`${allClips.length}件のクリップを削除しました`);
+}
+
+document.getElementById('login-btn').onclick = async () => {
+    const u=document.getElementById('login-user').value.trim(), p=document.getElementById('login-pass').value;
+    const err=document.getElementById('login-error');
+    if(!u||!p){err.textContent='Enter credentials';err.style.display='block';return;}
+    try {
+        const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+        const d=await r.json();
+        if(r.ok&&d.authenticated){currentRole=d.role;document.getElementById('login-overlay').classList.add('hidden');applyRole();loadAll();}
+        else{err.textContent=d.error||'Invalid';err.style.display='block';}
+    }catch(e){err.textContent='Connection error';err.style.display='block';}
+};
+document.getElementById('login-pass').onkeydown = e => { if(e.key==='Enter') document.getElementById('login-btn').click(); };
+document.getElementById('guest-btn').onclick = async () => {
+    await fetch('/api/auth/guest',{method:'POST'}); currentRole='guest';
+    document.getElementById('login-overlay').classList.add('hidden'); applyRole(); loadAll();
+};
+document.getElementById('auth-toggle').onclick = () => {
+    if(currentRole==='admin') { fetch('/api/auth/logout',{method:'POST'}); currentRole='guest'; document.getElementById('login-overlay').classList.remove('hidden'); applyRole(); }
+    else document.getElementById('login-overlay').classList.remove('hidden');
+};
+
+// Tabs
+document.querySelectorAll('.tab-item').forEach(t => t.onclick = e => { e.preventDefault(); switchTab(t.dataset.tab); });
+function switchTab(tab) {
+    currentTab=tab;
+    document.querySelectorAll('.tab-item').forEach(t=>t.classList.toggle('active',t.dataset.tab===tab));
+    document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+tab));
+    if(tab==='recordings') loadRecordings();
+    if(tab==='clips') loadClips();
+    if(tab==='targets') loadTargets();
+    if(tab==='logs') loadLogs();
+}
+
+// Storage
+async function loadStorage() {
+    try {
+        const r=await fetch('/api/system/storage'); const d=await r.json();
+        document.getElementById('stat-free').textContent=fmtSize(d.free);
+        document.getElementById('stat-size').textContent=fmtSize(d.recordingsSize);
+    } catch(e){}
+}
+
+// Recordings
+async function loadRecordings() {
+    try {
+        const r=await fetch('/api/recordings'); allRecordings=await r.json();
+        const users=[...new Set(allRecordings.map(r=>r.displayName).filter(Boolean))];
+        const sel=document.getElementById('filter-user');
+        const cur=sel.value;
+        sel.innerHTML='<option value="">All</option>'+users.map(u=>`<option value="${esc(u)}">${esc(u)}</option>`).join('');
+        sel.value=cur;
+        renderRecordings();
+    } catch(e){}
+}
+
+function renderRecordings() {
+    const grid=document.getElementById('rec-grid');
+    const isGrid = true;
+    const toggleBtn=document.getElementById('toggle-view');
+    if(toggleBtn) toggleBtn.style.display='none';
+    grid.className='card-grid';
+
+    let recs=[...allRecordings];
+    const user=document.getElementById('filter-user').value;
+    if(user) recs=recs.filter(r=>r.displayName===user);
+
+    // Live targets
+    let liveHtml='';
+    let liveTsFiles=new Set();
+    if(allTargets.length) {
+        let liveTargets=allTargets.filter(t=>t.isLiveRecording);
+        if(user) liveTargets=liveTargets.filter(t=>t.name===user);
+        liveHtml=liveTargets.map(t=>{
+            const c=getColor(t.name);
+            const thumb=t.liveThumbnail?`background-image:url('${t.liveThumbnail}')`:`background:linear-gradient(135deg,${c}dd,${c}99)`;
+            const tsRec=allRecordings.find(r=>r.filename.endsWith('.ts')&&(r.userId===t.userId||r.displayName===t.name));
+            if(tsRec) liveTsFiles.add(tsRec.filename);
+            const tsFile=tsRec?tsRec.filename:'';
+            const size=tsRec?fmtSize(tsRec.size):'';
+            return `<div class="card" ${tsFile?`data-file="${esc(tsFile)}"`:''} style="box-shadow:0 0 12px rgba(239,68,68,.25)">
+                <div class="card-thumb" style="${thumb}">
+                    <div class="live-badge"><span style="display:inline-block;width:6px;height:6px;background:#fff;border-radius:50%"></span>LIVE</div>
+                    ${size?`<span class="views-badge">${size}</span>`:''}
+                </div>
+                <div class="card-body">
+                    <div class="card-title">${tsRec?esc(tsRec.title||'Recording...'):'Recording...'}</div>
+                    <div class="card-meta">${esc(t.name||'')} &bull; 配信中</div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+    recs=recs.filter(r=>!liveTsFiles.has(r.filename));
+
+    document.getElementById('stat-count').textContent=recs.length;
+    if(!recs.length && !liveHtml){
+        grid.innerHTML='<div class="empty-state" style="grid-column:1/-1"><span class="material-symbols-outlined">videocam_off</span><p>No recordings</p></div>';
+        return;
+    }
+
+    // Group by date
+    const groups={};
+    recs.forEach(r=>{
+        const key=r.startTime?new Date(r.startTime).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'不明';
+        if(!groups[key]) groups[key]=[];
+        groups[key].push(r);
+    });
+
+    const renderCard = r => {
+        const c=getColor(r.displayName);
+        const dur=r.duration?fmtDur(r.duration):'';
+        const ago=timeAgo(r.startTime);
+        return `<div class="card" data-file="${esc(r.filename)}">
+            <div class="card-thumb" style="background-image:url('/api/thumbnails/${encodeURIComponent(r.filename)}');background-color:${c}44">
+                ${dur?`<span class="duration">${dur}</span>`:''}
+                ${r.size?`<span class="views-badge">${fmtSize(r.size)}</span>`:''}
+                ${currentRole==='admin'?`<button class="del-rec" data-file="${esc(r.filename)}" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,.6);border:none;color:#fff;border-radius:6px;padding:4px;cursor:pointer;display:none"><span class="material-symbols-outlined" style="font-size:18px">delete</span></button>`:''}
+            </div>
+            <div class="card-body">
+                <div class="card-title">${esc(r.title||r.filename)}</div>
+                <div class="card-meta">${esc(r.displayName||'')}${ago?' &bull; '+ago:''}</div>
+            </div>
+        </div>`;
+    };
+
+    const dateSep = date =>
+        `<div style="font-size:13px;font-weight:700;color:var(--text2);padding:12px 12px 4px;border-bottom:1px solid var(--border);background:var(--bg)">${esc(date)}</div>`;
+
+    let html = liveHtml;
+    Object.keys(groups).forEach(date=>{
+        html+=dateSep(date);
+        html+=groups[date].map(renderCard).join('');
+    });
+    grid.innerHTML=html;
+
+    // Event listeners
+    grid.querySelectorAll('[data-file]').forEach(c => c.onclick = e => {
+        if(e.target.closest('.del-rec')) return;
+        openVideo(c.dataset.file);
+    });
+    grid.querySelectorAll('.del-rec').forEach(b => b.onclick = async e => {
+        e.stopPropagation();
+        if(!confirm('Delete?')) return;
+        await fetch(`/api/recordings/${encodeURIComponent(b.dataset.file)}`,{method:'DELETE'});
+        loadRecordings();
+    });
+    if(isGrid) {
+        grid.querySelectorAll('.card[data-file]').forEach(c => {
+            let timer;
+            c.addEventListener('touchstart',()=>{timer=setTimeout(()=>{const d=c.querySelector('.del-rec');if(d)d.style.display='block';},500);},{passive:true});
+            c.addEventListener('touchend',()=>clearTimeout(timer),{passive:true});
+            c.addEventListener('touchmove',()=>clearTimeout(timer),{passive:true});
+            c.addEventListener('mouseenter',()=>{const d=c.querySelector('.del-rec');if(d)d.style.display='block';});
+            c.addEventListener('mouseleave',()=>{const d=c.querySelector('.del-rec');if(d)d.style.display='none';});
+        });
+    }
+}
+
+document.getElementById('filter-user').onchange = renderRecordings;
+document.getElementById('toggle-view').onclick = () => {
+    recViewMode = recViewMode==='list'?'grid':'list';
+    localStorage.setItem('recViewMode', recViewMode);
+    renderRecordings();
+};
+
+// Clips
+async function loadClips() {
+    try {
+        const r=await fetch('/api/clips'); allClips=await r.json();
+        renderClips();
+    } catch(e){}
+}
+
+function renderClips() {
+    const grid=document.getElementById('clips-grid');
+    document.getElementById('clips-count').textContent=allClips.length+' clips';
+    if(!allClips.length) {
+        grid.innerHTML='<div class="empty-state"><span class="material-symbols-outlined">content_cut</span><p>No clips yet</p><p style="font-size:12px;margin-top:4px">Open a recording and use IN/OUT to create clips</p></div>';
+        return;
+    }
+    grid.innerHTML=allClips.map(c=>{
+        const dur=c.endTime&&c.startTime?fmtDur(c.endTime-c.startTime):'';
+        const date=c.createdAt?new Date(c.createdAt).toLocaleDateString('ja-JP'):'';
+        const label=c.clipName||c.title||c.source||c.filename;
+        return `<div class="clip-card" data-clip="${esc(c.filename)}">
+            <div class="clip-card-thumb" style="background-image:url('/api/clip-thumbnails/${encodeURIComponent(c.filename)}')"></div>
+            <div class="clip-card-body">
+                <div class="clip-card-title">${esc(label)}</div>
+                <div class="clip-card-meta">${dur?dur+', ':''}${esc(c.displayName||'')}${date?', '+date:''}</div>
+                <div class="clip-card-actions">
+                    <button class="clip-action-btn rename-clip" data-clip="${esc(c.filename)}" data-name="${esc(c.clipName||'')}"><span class="material-symbols-outlined">edit</span>Edit</button>
+                    <button class="clip-action-btn share-clip" data-clip="${esc(c.filename)}"><span class="material-symbols-outlined">share</span>Share</button>
+                    ${currentRole==='admin'?`<button class="clip-action-btn del-clip" data-clip="${esc(c.filename)}"><span class="material-symbols-outlined">delete</span>Delete</button>`:''}
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    grid.querySelectorAll('.clip-card[data-clip]').forEach(c => c.querySelector('.clip-card-thumb').onclick = () => openClip(c.dataset.clip));
+    grid.querySelectorAll('.del-clip').forEach(b => b.onclick = async e => {
+        e.stopPropagation();
+        if(!confirm('Delete this clip?')) return;
+        await fetch(`/api/clips/${encodeURIComponent(b.dataset.clip)}`,{method:'DELETE'});
+        loadClips();
+    });
+    grid.querySelectorAll('.rename-clip').forEach(b => b.onclick = async e => {
+        e.stopPropagation();
+        const newName=prompt('クリップ名を編集', b.dataset.name||'');
+        if(newName===null) return;
+        await fetch(`/api/clips/${encodeURIComponent(b.dataset.clip)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({clipName:newName})});
+        loadClips();
+        showToast('クリップ名を更新しました');
+    });
+    grid.querySelectorAll('.share-clip').forEach(b => b.onclick = async e => {
+        e.stopPropagation();
+        try {
+            const r=await fetch(`/api/clips/${encodeURIComponent(b.dataset.clip)}/share`,{method:'POST'});
+            const d=await r.json();
+            if(d.success){
+                const url=`${location.origin}${d.url}`;
+                if(navigator.share) {
+                    navigator.share({title:'Clip',url}).catch(()=>{});
+                } else {
+                    // Clipboard API may fail on non-HTTPS, use fallback
+                    try {
+                        await navigator.clipboard.writeText(url);
+                        showToast('共有URLをコピーしました (24時間有効)');
+                    } catch(ce) {
+                        prompt('共有URL (24時間有効):', url);
+                    }
+                }
+            } else { showToast('共有リンク生成に失敗'); }
+        } catch(e){ showToast('通信エラー'); }
+    });
+}
+
+function openClip(filename) {
+    if(hls){hls.destroy();hls=null;}
+    currentFilename=filename; isClipMode=true;
+    const clip=allClips.find(c=>c.filename===filename);
+    const label=clip?(clip.clipName||clip.title||filename):filename;
+    const dur=clip&&clip.endTime&&clip.startTime?fmtDur(clip.endTime-clip.startTime):'';
+    const date=clip&&clip.createdAt?new Date(clip.createdAt).toLocaleDateString('ja-JP'):'';
+
+    document.getElementById('cv-title').textContent=label;
+    document.getElementById('cv-meta').textContent=[clip&&clip.displayName,dur,date].filter(Boolean).join(' · ');
+
+    // Actions
+    const acts=document.getElementById('cv-actions');
+    const srcFile = clip?.source || '';
+    const srcStart = clip?.startTime ?? null;
+    acts.innerHTML=`
+        <button class="cv-action-btn" id="cv-share"><span class="material-symbols-outlined">share</span>共有</button>
+        <a class="cv-action-btn" href="/clip/${encodeURIComponent(filename)}" download style="text-decoration:none;color:inherit"><span class="material-symbols-outlined">download</span>保存</a>
+        <button class="cv-action-btn" id="cv-edit"><span class="material-symbols-outlined">edit</span>編集</button>
+        ${srcFile?`<button class="cv-action-btn" id="cv-jump-rec"><span class="material-symbols-outlined">movie</span>録画を開く</button>`:''}
+        ${currentRole==='admin'?`<button class="cv-action-btn" id="cv-del" style="color:var(--red)"><span class="material-symbols-outlined">delete</span>削除</button>`:''}
+    `;
+    acts.querySelector('#cv-jump-rec')?.addEventListener('click', ()=>{
+        closeClipView();
+        openVideo(srcFile, srcStart);
+    });
+    acts.querySelector('#cv-share')?.addEventListener('click', async()=>{
+        try {
+            const r=await fetch(`/api/clips/${encodeURIComponent(filename)}/share`,{method:'POST'});
+            const d=await r.json();
+            if(d.success){
+                const url=`${location.origin}${d.url}`;
+                if(navigator.share) navigator.share({title:label,url}).catch(()=>{});
+                else { try{await navigator.clipboard.writeText(url);showToast('共有URLをコピーしました');}catch(e){prompt('共有URL:',url);} }
+            }
+        } catch(e){ showToast('通信エラー'); }
+    });
+    acts.querySelector('#cv-edit')?.addEventListener('click', async()=>{
+        const newName=prompt('クリップ名を編集', clip?.clipName||'');
+        if(newName===null) return;
+        await fetch(`/api/clips/${encodeURIComponent(filename)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({clipName:newName})});
+        loadClips(); showToast('クリップ名を更新しました');
+        document.getElementById('cv-title').textContent=newName||label;
+    });
+    acts.querySelector('#cv-del')?.addEventListener('click', async()=>{
+        if(!confirm('Delete this clip?')) return;
+        await fetch(`/api/clips/${encodeURIComponent(filename)}`,{method:'DELETE'});
+        closeClipView(); loadClips();
+    });
+
+    // Comments collapsed by default
+    document.getElementById('cv-comments-body').classList.remove('open');
+    document.getElementById('cv-comment-list').innerHTML='';
+    document.getElementById('cv-comments-count').textContent='';
+
+    const video=document.getElementById('cv-video');
+    video.src=`/clip/${encodeURIComponent(filename)}`;
+    video.play().catch(()=>{});
+
+    document.getElementById('clip-view').classList.add('open');
+    document.getElementById('clip-view').scrollTop=0;
+    loadCvComments(filename);
+}
+
+function closeClipView() {
+    const video=document.getElementById('cv-video');
+    video.pause(); video.src='';
+    document.getElementById('clip-view').classList.remove('open');
+    currentFilename=''; isClipMode=false;
+}
+
+async function loadCvComments(filename) {
+    const list=document.getElementById('cv-comment-list');
+    try {
+        const r=await fetch(`/api/clip-comments/${encodeURIComponent(filename)}`);
+        const comments=await r.json();
+        document.getElementById('cv-comments-count').textContent=comments.length?`${comments.length}件`:'';
+        if(!comments.length){list.innerHTML='<div style="text-align:center;color:var(--text2);font-size:13px;padding:12px">コメントはまだありません</div>';return;}
+        list.innerHTML=comments.map(c=>`<div class="cv-comment-item">
+            <div class="cv-comment-author">${esc(c.author)}${currentRole==='admin'?` <button class="comment-item-del" data-id="${c.id}" style="background:none;border:none;color:var(--text2);cursor:pointer;vertical-align:middle"><span class="material-symbols-outlined" style="font-size:14px">close</span></button>`:''}</div>
+            <div class="cv-comment-text">${esc(c.comment)}</div>
+        </div>`).join('');
+        list.querySelectorAll('.comment-item-del').forEach(b=>b.onclick=async()=>{
+            await fetch(`/api/clip-comments/${b.dataset.id}`,{method:'DELETE'});
+            loadCvComments(currentFilename);
+        });
+    } catch(e){ list.innerHTML=''; }
+}
+
+// Targets
+async function loadTargets() {
+    try {
+        const r=await fetch('/api/targets'); const d=await r.json();
+        allTargets=Array.isArray(d)?d:(d.targets||[]);
+        renderTargets();
+    } catch(e){}
+}
+
+function renderTargets() {
+    const list=document.getElementById('target-list');
+    if(!allTargets.length) { list.innerHTML='<div class="empty-state"><span class="material-symbols-outlined">person_search</span><p>No targets</p></div>'; return; }
+    list.innerHTML=allTargets.map(t=>{
+        const live=t.isLiveRecording;
+        return `<div class="target-row">
+            <div class="target-avatar">${t.avatar?`<img src="${t.avatar}" onerror="this.style.display='none'">`:'<span class="material-symbols-outlined" style="color:var(--text2)">person</span>'}</div>
+            <div class="target-info">
+                <div class="target-name">${esc(t.name||'Unknown')} ${live?'<span style="color:var(--red);font-size:11px;font-weight:700">LIVE</span>':''}</div>
+                <div class="target-id">${esc(t.userId)}</div>
+            </div>
+            ${currentRole==='admin'?`
+                <div class="target-interval">
+                    <input type="number" min="10" max="300" value="${t.checkInterval||30}" data-uid="${esc(t.userId)}" class="interval-input" title="チェック間隔">
+                    <span>秒</span>
+                </div>
+                <div class="target-interval">
+                    <input type="number" min="1" max="365" value="${t.retentionDays||7}" data-uid="${esc(t.userId)}" class="retention-input" title="保持日数">
+                    <span>日</span>
+                </div>
+                <button class="toggle ${t.isRecording?'on':''}" data-uid="${esc(t.userId)}"></button>
+                <button class="target-delete" data-uid="${esc(t.userId)}"><span class="material-symbols-outlined" style="font-size:20px">delete</span></button>
+            `:`<span style="font-size:12px;color:${t.isRecording?'var(--accent)':'var(--text2)'}">${t.isRecording?'ON':'OFF'}</span>`}
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.toggle').forEach(b => b.onclick = async () => {
+        const uid=b.dataset.uid, on=!b.classList.contains('on');
+        b.classList.toggle('on',on);
+        await fetch(`/api/targets/${uid}/toggle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})});
+    });
+    list.querySelectorAll('.interval-input').forEach(inp => {
+        let timer;
+        inp.onchange = async () => {
+            const uid=inp.dataset.uid, val=parseInt(inp.value)||30;
+            inp.value=Math.max(10,Math.min(300,val));
+            clearTimeout(timer);
+            timer=setTimeout(async()=>{
+                await fetch(`/api/targets/${uid}/toggle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({checkInterval:parseInt(inp.value)})});
+                showToast(`Interval: ${inp.value}s`);
+            },300);
+        };
+    });
+    list.querySelectorAll('.retention-input').forEach(inp => {
+        let timer;
+        inp.onchange = async () => {
+            const uid=inp.dataset.uid, val=parseInt(inp.value)||7;
+            inp.value=Math.max(1,Math.min(365,val));
+            clearTimeout(timer);
+            timer=setTimeout(async()=>{
+                await fetch(`/api/targets/${uid}/toggle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({retentionDays:parseInt(inp.value)})});
+                showToast(`保持期間: ${inp.value}日`);
+            },300);
+        };
+    });
+    list.querySelectorAll('.target-delete').forEach(b => b.onclick = async () => {
+        if(!confirm('Delete target?')) return;
+        await fetch(`/api/targets/${b.dataset.uid}`,{method:'DELETE'}); loadTargets();
+    });
+}
+
+document.getElementById('add-target-btn').onclick = async () => {
+    const input=document.getElementById('add-target-input'), uid=input.value.trim();
+    if(!uid){showToast('Enter User ID');return;}
+    const r=await fetch('/api/targets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:uid})});
+    if(r.ok){input.value='';loadTargets();showToast('Target added');}
+    else showToast('Failed to add');
+};
+
+// Logs
+async function loadLogs() {
+    if(currentRole!=='admin') return;
+    try {
+        const r=await fetch('/api/system/logs'); const d=await r.json();
+        const pre=document.getElementById('logs-content');
+        pre.textContent=d.logs||'No logs';
+        pre.parentElement.scrollTop=pre.parentElement.scrollHeight;
+    } catch(e){ document.getElementById('logs-content').textContent='Failed to load'; }
+}
+document.getElementById('refresh-logs').onclick = loadLogs;
+
+// Video Player
+async function loadVideoHls(filename, seekTo) {
+    const video=document.getElementById('modal-video');
+    if(hls){hls.destroy();hls=null;}
+    const src=`/video/${encodeURIComponent(filename)}?t=${Date.now()}`;
+    const rec=allRecordings.find(r=>r.filename===filename);
+    const fileSize=rec?rec.size:0;
+
+    // Use cached duration from recordings list, else fetch
+    let totalDur=rec?.duration||0;
+    if(!totalDur) {
+        try {
+            const dr=await fetch(`/api/duration/${encodeURIComponent(filename)}`);
+            const dd=await dr.json();
+            totalDur=dd.duration||0;
+            if(rec) rec.duration=totalDur; // cache locally
+        } catch(e){}
+    }
+
+    let m3u8;
+    if(fileSize>0 && totalDur>0){
+        const segSize=2*1024*1024;
+        const segCount=Math.ceil(fileSize/segSize);
+        const segDur=totalDur/segCount;
+        m3u8=`#EXTM3U\n#EXT-X-VERSION:4\n#EXT-X-TARGETDURATION:${Math.ceil(segDur)}\n#EXT-X-MEDIA-SEQUENCE:0\n`;
+        for(let i=0;i<segCount;i++){
+            const offset=i*segSize;
+            const length=Math.min(segSize, fileSize-offset);
+            m3u8+=`#EXTINF:${segDur.toFixed(3)},\n#EXT-X-BYTERANGE:${length}@${offset}\n${location.origin}${src}\n`;
+        }
+        m3u8+='#EXT-X-ENDLIST';
+    } else {
+        // Fallback: single segment with unknown duration
+        const dur=totalDur||14400;
+        m3u8=`#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:${Math.ceil(dur)}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:${dur},\n${location.origin}${src}\n#EXT-X-ENDLIST`;
+    }
+    const blob=new Blob([m3u8],{type:'application/vnd.apple.mpegurl'});
+    hls=new Hls({maxBufferLength:15, maxMaxBufferLength:60, startFragPrefetch:true});
+    hls.loadSource(URL.createObjectURL(blob)); hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{
+        if(seekTo==='end') { video.currentTime=video.duration||0; }
+        else if(typeof seekTo==='number') { video.currentTime=seekTo; }
+        video.play().catch(()=>{});
+    });
+}
+
+async function openVideo(filename, seekTo=null) {
+    const modal=document.getElementById('video-modal');
+    const video=document.getElementById('modal-video');
+    if(hls){hls.destroy();hls=null;}
+    currentFilename=filename; isClipMode=false;
+    const rec=allRecordings.find(r=>r.filename===filename);
+    const isLiveTs=filename.endsWith('.ts');
+    document.getElementById('modal-title').textContent=rec?(rec.title||rec.filename):filename;
+    document.getElementById('modal-download').href=`/video/${encodeURIComponent(filename)}`;
+    document.getElementById('clip-bar').style.display='';
+    document.getElementById('modal-reload').style.display=isLiveTs?'':'none';
+    document.getElementById('comment-panel').style.display='none';
+    document.getElementById('info-panel').style.display='none';
+    document.getElementById('modal-info').style.background='rgba(255,255,255,.15)';
+    stopInfoPanel();
+    infoVisible=false;
+    speedIdx=0; document.getElementById('btn-speed').textContent='1x';
+    rotIdx=0; document.getElementById('modal-video').classList.remove(...ROT_CLASSES.filter(Boolean));
+
+    if(tsAutoReload) { clearInterval(tsAutoReload); tsAutoReload=null; }
+
+    if(isLiveTs && typeof Hls !== 'undefined' && Hls.isSupported()) {
+        await loadVideoHls(filename);
+        const onEnded = () => {
+            if(!currentFilename || !currentFilename.endsWith('.ts')) return;
+            const v=document.getElementById('modal-video');
+            const endPos=v.currentTime||0;
+            showToast('新しいデータを読み込み中...');
+            setTimeout(async()=>{
+                if(!currentFilename || !currentFilename.endsWith('.ts')) return;
+                await loadVideoHls(currentFilename, endPos);
+                const v2=document.getElementById('modal-video');
+                v2.addEventListener('ended', onEnded, {once:true});
+            }, 3000);
+        };
+        video.addEventListener('ended', onEnded, {once:true});
+        tsAutoReload=setInterval(async()=>{
+            if(!currentFilename || !currentFilename.endsWith('.ts')) { clearInterval(tsAutoReload); tsAutoReload=null; return; }
+            const v=document.getElementById('modal-video');
+            if(v.paused && v.duration && (v.duration-v.currentTime)<1) {
+                await loadVideoHls(currentFilename, v.currentTime);
+                v.addEventListener('ended', onEnded, {once:true});
+            }
+        }, 15000);
+    } else {
+        video.src=`/video/${encodeURIComponent(filename)}`;
+        video.play().catch(()=>{});
+    }
+
+    clipIn=null; clipOut=null; updateClipUI();
+    speedIdx=0; document.getElementById('btn-speed').textContent='1x';
+    document.getElementById('modal-video').playbackRate = 1;
+    modal.classList.add('open');
+    if(seekTo != null) {
+        const doSeek = () => { video.currentTime = seekTo; video.removeEventListener('loadedmetadata', doSeek); };
+        if(video.readyState >= 1) video.currentTime = seekTo;
+        else video.addEventListener('loadedmetadata', doSeek);
+    }
+}
+
+function closeVideo() {
+    const modal=document.getElementById('video-modal');
+    const video=document.getElementById('modal-video');
+    video.pause(); video.src='';
+    if(hls){hls.destroy();hls=null;}
+    if(tsAutoReload){clearInterval(tsAutoReload);tsAutoReload=null;}
+    document.getElementById('comment-panel').style.display='none';
+    document.getElementById('info-panel').style.display='none';
+    document.getElementById('modal-info').style.background='rgba(255,255,255,.15)';
+    stopInfoPanel();
+    infoVisible=false;
+    speedIdx=0; document.getElementById('btn-speed').textContent='1x';
+    modal.classList.remove('open');
+    currentFilename=''; isClipMode=false;
+}
+
+document.getElementById('modal-close').onclick = closeVideo;
+document.getElementById('modal-reload').onclick = async () => {
+    if(!currentFilename || !currentFilename.endsWith('.ts')) return;
+    showToast('更新中...');
+    await loadVideoHls(currentFilename, 'end');
+};
+// Close on background click
+document.getElementById('video-container').onclick = e => { if(e.target.id==='video-container') closeVideo(); };
+
+// Clip Controls
+document.getElementById('btn-in').onclick = () => {
+    clipIn=document.getElementById('modal-video').currentTime;
+    updateClipUI();
+    showToast('IN: '+fmtTime(clipIn));
+};
+document.getElementById('btn-out').onclick = () => {
+    clipOut=document.getElementById('modal-video').currentTime;
+    updateClipUI();
+    showToast('OUT: '+fmtTime(clipOut));
+};
+
+function updateClipUI() {
+    const inB=document.getElementById('clip-in-badge'), outB=document.getElementById('clip-out-badge');
+    const durL=document.getElementById('clip-duration-label'), clipBtn=document.getElementById('btn-clip');
+    inB.textContent=clipIn!==null?`IN ${fmtTime(clipIn)}`:'IN --:--';
+    inB.classList.toggle('set',clipIn!==null);
+    outB.textContent=clipOut!==null?`OUT ${fmtTime(clipOut)}`:'OUT --:--';
+    outB.classList.toggle('set',clipOut!==null);
+    if(clipIn!==null && clipOut!==null && clipOut>clipIn) {
+        durL.textContent=fmtDur(clipOut-clipIn);
+        clipBtn.disabled=false;
+    } else {
+        durL.textContent='';
+        clipBtn.disabled=true;
+    }
+}
+
+document.getElementById('btn-clip').onclick = async () => {
+    if(clipIn===null||clipOut===null||clipOut<=clipIn||!currentFilename) return;
+    const clipName=prompt('クリップ名を入力（空欄でもOK）','');
+    if(clipName===null) return; // cancelled
+    const prog=document.getElementById('clip-progress');
+    const clipBtn=document.getElementById('btn-clip');
+    prog.classList.add('show'); clipBtn.disabled=true;
+    try {
+        const r=await fetch('/api/clips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:currentFilename,startTime:clipIn,endTime:clipOut,clipName:clipName})});
+        const d=await r.json();
+        if(r.ok&&d.success){
+            showToast('Clip created!');
+            clipIn=null;clipOut=null;updateClipUI();
+        } else {
+            showToast('Error: '+(d.error||'Failed'));
+        }
+    } catch(e){ showToast('Connection error'); }
+    prog.classList.remove('show'); clipBtn.disabled=false;
+};
+
+// Clip Comments
+async function loadClipComments(filename) {
+    const list=document.getElementById('comment-list');
+    list.innerHTML='<div style="text-align:center;color:var(--text2);font-size:12px;padding:8px">読み込み中...</div>';
+    try {
+        const r=await fetch(`/api/clip-comments/${encodeURIComponent(filename)}`);
+        const comments=await r.json();
+        if(!comments.length) {
+            list.innerHTML='<div style="text-align:center;color:var(--text2);font-size:12px;padding:8px">コメントはまだありません</div>';
+            return;
+        }
+        list.innerHTML=comments.map(c=>`<div class="comment-item">
+            <div class="comment-item-header">
+                <span class="comment-item-author">${esc(c.author)}</span>
+                <span style="display:flex;align-items:center;gap:4px">
+                    <span class="comment-item-time">${esc(c.createdAt)}</span>
+                    ${currentRole==='admin'?`<button class="comment-item-del" data-id="${c.id}"><span class="material-symbols-outlined" style="font-size:14px">close</span></button>`:''}
+                </span>
+            </div>
+            <div class="comment-item-body">${esc(c.comment)}</div>
+        </div>`).join('');
+        list.scrollTop=list.scrollHeight;
+        list.querySelectorAll('.comment-item-del').forEach(b=>b.onclick=async()=>{
+            await fetch(`/api/clip-comments/${b.dataset.id}`,{method:'DELETE'});
+            loadClipComments(currentFilename);
+        });
+    } catch(e) { list.innerHTML='<div style="color:var(--red);font-size:12px;padding:8px">エラー</div>'; }
+}
+
+document.getElementById('comment-send').onclick=async()=>{
+    const author=document.getElementById('comment-author').value.trim();
+    const comment=document.getElementById('comment-text').value.trim();
+    if(!comment||!currentFilename) return;
+    await fetch(`/api/clip-comments/${encodeURIComponent(currentFilename)}`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({author,comment})
+    });
+    document.getElementById('comment-text').value='';
+    loadClipComments(currentFilename);
+};
+
+// Clip view events
+document.getElementById('cv-back').onclick=()=>closeClipView();
+document.getElementById('cv-comments-header').onclick=()=>{
+    document.getElementById('cv-comments-body').classList.toggle('open');
+};
+document.getElementById('cv-comment-send').onclick=async()=>{
+    const author=document.getElementById('cv-comment-author').value.trim();
+    const comment=document.getElementById('cv-comment-text').value.trim();
+    if(!comment||!currentFilename) return;
+    await fetch(`/api/clip-comments/${encodeURIComponent(currentFilename)}`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({author,comment})
+    });
+    document.getElementById('cv-comment-text').value='';
+    loadCvComments(currentFilename);
+};
+
+document.getElementById('comment-text').onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();document.getElementById('comment-send').click();}
+};
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+    const modal=document.getElementById('video-modal');
+    if(!modal.classList.contains('open')) return;
+    if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+    const video=document.getElementById('modal-video');
+    switch(e.key) {
+        case 'Escape': closeVideo(); break;
+        case ' ': case 'k': e.preventDefault(); video.paused?video.play():video.pause(); break;
+        case 'ArrowRight': video.currentTime+=5; break;
+        case 'ArrowLeft': video.currentTime-=5; break;
+        case 'i': case 'I': if(!isClipMode){clipIn=video.currentTime; updateClipUI(); showToast('IN: '+fmtTime(clipIn));} break;
+        case 'o': case 'O': if(!isClipMode){clipOut=video.currentTime; updateClipUI(); showToast('OUT: '+fmtTime(clipOut));} break;
+        case 'f': video.requestFullscreen?.(); break;
+    }
+});
+
+// Init
+async function loadAll() {
+    await loadTargets();
+    loadRecordings(); loadClips(); loadStorage();
+}
+checkAuth().then(loadAll);
+setInterval(loadStorage, 30000);
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
+
+// WebSocket for real-time updates
+let ws=null, wsRetry=null;
+function connectWS(){
+    if(ws && ws.readyState<=1) return;
+    const proto=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(`${proto}//${location.hostname}:3002`);
+    ws.onmessage=e=>{
+        try{
+            const msg=JSON.parse(e.data);
+            switch(msg.type){
+                case 'recording_update': loadRecordings(); break;
+                case 'clip_update': loadClips(); break;
+                case 'target_update': loadTargets().then(()=>{ if(currentTab==='recordings') renderRecordings(); }); break;
+                case 'live_status': loadTargets().then(()=>{ if(currentTab==='recordings') renderRecordings(); }); break;
+            }
+        }catch(e){}
+    };
+    ws.onclose=()=>{ wsRetry=setTimeout(connectWS, 5000); };
+    ws.onerror=()=>{ ws.close(); };
+}
+connectWS();
+
+// ---- Rotate control ----
+const ROT_CLASSES = ['', 'rot90', 'rot180', 'rot270'];
+let rotIdx = 0;
+document.getElementById('modal-rotate').onclick = () => {
+    const video = document.getElementById('modal-video');
+    const vc = document.getElementById('video-container');
+    video.classList.remove(...ROT_CLASSES.filter(Boolean));
+    rotIdx = (rotIdx + 1) % 4;
+    if (rotIdx !== 0) {
+        vc.style.setProperty('--vc-w', vc.clientWidth + 'px');
+        vc.style.setProperty('--vc-h', vc.clientHeight + 'px');
+        video.classList.add(ROT_CLASSES[rotIdx]);
+    }
+};
+
+// ---- Speed control ----
+const SPEEDS = [1, 1.5, 2, 0.5];
+let speedIdx = 0;
+document.getElementById('btn-speed').onclick = () => {
+    speedIdx = (speedIdx + 1) % SPEEDS.length;
+    const s = SPEEDS[speedIdx];
+    document.getElementById('btn-speed').textContent = s + 'x';
+    document.getElementById('modal-video').playbackRate = s;
+};
+
+// ---- Info panel (transcript + comments) ----
+let infoVisible = false, infoCurTab = 'comments';
+let infoPollTimer = null, infoScrolling = false, infoScrollTimer = null;
+let transcriptOffset = 0, _transcriptSegs = [];
+
+function adjustOffset(delta) {
+    transcriptOffset += delta;
+    document.getElementById('offset-label').textContent = (transcriptOffset >= 0 ? '+' : '') + transcriptOffset + 's';
+    renderInfoSegs(_transcriptSegs.map(s => ({...s, start: Math.max(0, s.start + transcriptOffset)})));
+}
+
+function fmtT(s) {
+    const h=Math.floor(s/3600), m=Math.floor(s%3600/60), ss=Math.floor(s%60);
+    return h>0?`${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`:`${m}:${String(ss).padStart(2,'0')}`;
+}
+
+document.getElementById('modal-info').onclick = () => {
+    infoVisible = !infoVisible;
+    document.getElementById('info-panel').style.display = infoVisible ? 'flex' : 'none';
+    document.getElementById('modal-info').style.background = infoVisible ? 'rgba(79,110,247,.5)' : 'rgba(255,255,255,.15)';
+    if (infoVisible && currentFilename) loadInfoPanel(infoCurTab, currentFilename);
+    else if (!infoVisible) stopInfoPanel();
+};
+
+document.querySelectorAll('.info-tab').forEach(tab => {
+    tab.onclick = () => {
+        document.querySelectorAll('.info-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        infoCurTab = tab.dataset.tab;
+        document.getElementById('info-search').value = '';
+        document.getElementById('highlights-bar').style.display = 'none';
+        const oc = document.getElementById('offset-ctrl');
+        if (infoCurTab === 'transcript') { oc.style.display = 'flex'; }
+        else { oc.style.display = 'none'; }
+        if (currentFilename) loadInfoPanel(infoCurTab, currentFilename);
+    };
+});
+
+document.getElementById('info-search').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#info-list .info-seg').forEach(el => {
+        el.style.display = (!q || el.querySelector('.info-seg-text').textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+});
+
+document.getElementById('info-list').addEventListener('scroll', () => {
+    infoScrolling = true;
+    if (infoScrollTimer) clearTimeout(infoScrollTimer);
+    infoScrollTimer = setTimeout(() => { infoScrolling = false; }, 4000);
+}, {passive: true});
+
+function stopInfoPanel() {
+    if (infoPollTimer) { clearInterval(infoPollTimer); infoPollTimer = null; }
+    document.getElementById('modal-video').removeEventListener('timeupdate', highlightInfoSeg);
+}
+
+function infoSeek(t) {
+    const v = document.getElementById('modal-video');
+    v.currentTime = t; v.play().catch(()=>{});
+}
+
+function highlightInfoSeg() {
+    if (!infoVisible) return;
+    const t = document.getElementById('modal-video').currentTime;
+    const list = document.getElementById('info-list');
+    const segs = list.querySelectorAll('.info-seg');
+    let last = null;
+    segs.forEach(el => { el.classList.remove('active'); if (parseFloat(el.dataset.start) <= t) last = el; });
+    if (last) {
+        last.classList.add('active');
+        if (!infoScrolling) {
+            const r = last.getBoundingClientRect(), lr = list.getBoundingClientRect();
+            if (r.bottom > lr.bottom || r.top < lr.top) last.scrollIntoView({block:'nearest', behavior:'smooth'});
+        }
+    }
+}
+
+function showTranscriptSegs(segs) {
+    transcriptOffset = 0;
+    document.getElementById('offset-label').textContent = '0s';
+    document.getElementById('offset-ctrl').style.display = 'flex';
+    _transcriptSegs = segs.map(s => ({start:s.start, text:s.text}));
+    renderInfoSegs(_transcriptSegs);
+}
+
+function renderInfoSegs(items) {
+    const list = document.getElementById('info-list');
+    list.innerHTML = items.map((s,i) => `<div class="info-seg" data-idx="${i}" data-start="${s.start}" onclick="infoSeek(${s.start})">
+        <span class="info-seg-time">${fmtT(s.start)}</span>
+        <span class="info-seg-text">${s.prefix||''}${esc(s.text)}</span>
+    </div>`).join('');
+    const v = document.getElementById('modal-video');
+    v.removeEventListener('timeupdate', highlightInfoSeg);
+    v.addEventListener('timeupdate', highlightInfoSeg);
+}
+
+let _infoLoadId = 0;
+async function loadInfoPanel(tab, filename) {
+    const loadId = ++_infoLoadId;
+    const statusEl = document.getElementById('info-status');
+    const list = document.getElementById('info-list');
+    const hbar = document.getElementById('highlights-bar');
+    statusEl.innerHTML = '<div class="clip-spinner" style="width:14px;height:14px;border-width:2px"></div>';
+    list.innerHTML = '';
+    hbar.style.display = 'none';
+    if (infoPollTimer) { clearInterval(infoPollTimer); infoPollTimer = null; }
+    // If a newer load started, abort this one
+    const stale = () => _infoLoadId !== loadId;
+
+    if (tab === 'transcript') {
+        try {
+            const r = await fetch(`/api/transcriptions/${encodeURIComponent(filename)}`);
+            const d = await r.json();
+            if (stale()) return;
+            if (r.status === 404 || d.status === 'none') {
+                statusEl.innerHTML = '<div class="clip-spinner" style="width:14px;height:14px;border-width:2px"></div> 開始中...';
+                const pr = await fetch(`/api/transcriptions/${encodeURIComponent(filename)}`, {method:'POST'});
+                const pd = await pr.json();
+                if (stale()) return;
+                if (pd.status === 'done') {
+                    statusEl.textContent = '完了';
+                    showTranscriptSegs(pd.segments||[]);
+                    return;
+                }
+                pollTranscriptInfo(filename); return;
+            }
+            if (d.status === 'done') {
+                statusEl.textContent = '完了';
+                showTranscriptSegs(d.segments||[]);
+            } else if (d.status === 'processing' || d.status === 'pending') {
+                statusEl.innerHTML = '<div class="clip-spinner" style="width:14px;height:14px;border-width:2px"></div> 処理中...';
+                list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px">文字起こし処理中...</div>';
+                pollTranscriptInfo(filename);
+            } else if (d.status === 'error') {
+                statusEl.textContent = 'エラー';
+                list.innerHTML = `<div style="text-align:center;padding:20px;color:var(--red);font-size:13px">${esc(d.error||'エラー')}</div>`;
+            } else {
+                statusEl.textContent = '';
+                list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px">データなし</div>';
+            }
+        } catch(e) { if (!stale()) { statusEl.textContent=''; list.innerHTML='<div style="text-align:center;padding:20px;color:var(--red);font-size:13px">通信エラー</div>'; } }
+    } else if (tab === 'clips') {
+        const tsName = filename;
+        if (!allClips.length) await loadClips();
+        if (stale()) return;
+        const related = allClips.filter(c => c.source === tsName);
+        statusEl.textContent = related.length ? `${related.length}件` : '';
+        if (!related.length) {
+            list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px">このクリップはありません</div>';
+            return;
+        }
+        list.innerHTML = related.map(c => {
+            const label = c.clipName || c.title || c.filename;
+            const t = c.startTime || 0;
+            return `<div class="info-seg" style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer" onclick="infoSeek(${t})">
+                <span style="font-size:12px;color:var(--accent);font-weight:600;flex-shrink:0;min-width:44px">${fmtT(t)}</span>
+                <span style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>
+                <span class="material-symbols-outlined" style="font-size:18px;color:var(--text2);flex-shrink:0">play_circle</span>
+            </div>`;
+        }).join('');
+    } else {
+        try {
+            const r = await fetch(`/api/recordings/${encodeURIComponent(filename)}/livecomments`);
+            const d = await r.json();
+            if (stale()) return;
+            const comments = d.comments || [], highlights = d.highlights || [];
+            statusEl.textContent = comments.length ? `${comments.length}件` : '';
+            if (highlights.length) {
+                hbar.style.display = 'flex';
+                hbar.innerHTML = '<span style="font-size:11px;color:var(--text2);flex-shrink:0;align-self:center">🔥</span>' +
+                    highlights.map(h => `<button class="highlight-chip" onclick="infoSeek(${h.time})">${fmtT(h.time)} <span style="opacity:.7">${h.count}件</span></button>`).join('');
+            }
+            if (!comments.length) { list.innerHTML='<div style="text-align:center;padding:20px;color:var(--text2);font-size:13px">コメントなし</div>'; return; }
+            renderInfoSegs(comments.map(c => ({start:c.time, text:c.text, prefix:`<span style="color:var(--accent);font-weight:600;margin-right:4px">${esc(c.user)}</span>`})));
+        } catch(e) { statusEl.textContent=''; list.innerHTML='<div style="text-align:center;padding:20px;color:var(--red);font-size:13px">通信エラー</div>'; }
+    }
+}
+
+function pollTranscriptInfo(filename) {
+    if (infoPollTimer) clearInterval(infoPollTimer);
+    infoPollTimer = setInterval(async () => {
+        if (!infoVisible || currentFilename !== filename) { clearInterval(infoPollTimer); infoPollTimer = null; return; }
+        try {
+            const r = await fetch(`/api/transcriptions/${encodeURIComponent(filename)}`);
+            const d = await r.json();
+            if (d.status === 'done') {
+                clearInterval(infoPollTimer); infoPollTimer = null;
+                document.getElementById('info-status').textContent = '完了';
+                showTranscriptSegs(d.segments||[]);
+            } else if (d.status === 'error') {
+                clearInterval(infoPollTimer); infoPollTimer = null;
+                document.getElementById('info-status').textContent = 'エラー';
+                document.getElementById('info-list').innerHTML = `<div style="text-align:center;padding:20px;color:var(--red);font-size:13px">${esc(d.error||'エラー')}</div>`;
+            }
+        } catch(e){}
+    }, 5000);
+}
+</script>
+</body>
+</html>
