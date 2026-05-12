@@ -24,18 +24,23 @@
         .material-symbols-outlined { font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24; vertical-align:middle; }
 
         /* Login */
-        #login-overlay { position:fixed; inset:0; z-index:200; background:var(--bg); display:flex; align-items:center; justify-content:center; }
+        #login-overlay { position:fixed; inset:0; z-index:200; background:radial-gradient(ellipse at 50% 40%, #0d1225 0%, #060912 70%); display:flex; align-items:center; justify-content:center; }
         #login-overlay.hidden { display:none; }
-        .login-box { width:100%; max-width:340px; padding:24px; }
-        .login-box h1 { font-size:24px; font-weight:800; text-align:center; margin-bottom:24px; }
-        .login-box input { width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:15px; margin-bottom:12px; outline:none; }
-        .login-box input:focus { border-color:var(--accent); }
-        .login-box button { width:100%; padding:12px; border-radius:10px; border:none; font-size:15px; font-weight:600; cursor:pointer; }
-        .btn-primary { background:var(--accent); color:#fff; }
+        .login-box { width:100%; max-width:360px; padding:32px 28px; background:rgba(19,24,41,0.9); border:1px solid rgba(79,110,247,0.18); border-radius:20px; backdrop-filter:blur(20px); box-shadow:0 24px 64px rgba(0,0,0,.6),0 0 0 1px rgba(79,110,247,0.08); }
+        .login-logo { text-align:center; margin-bottom:16px; }
+        .login-logo img { width:64px; height:64px; border-radius:18px; box-shadow:0 8px 24px rgba(79,110,247,0.35); }
+        .login-box h1 { font-size:28px; font-weight:800; text-align:center; margin-bottom:4px; letter-spacing:-0.5px; }
+        .login-subtitle { text-align:center; color:var(--text2); font-size:13px; margin-bottom:24px; }
+        .login-box input { width:100%; padding:13px 16px; border-radius:12px; border:1px solid var(--border); background:var(--surface); color:var(--text); font-size:15px; margin-bottom:10px; outline:none; transition:border-color .15s,box-shadow .15s; }
+        .login-box input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(79,110,247,0.15); }
+        .login-box button { width:100%; padding:13px; border-radius:12px; border:none; font-size:15px; font-weight:600; cursor:pointer; transition:opacity .15s,transform .1s; }
+        .login-box button:active { transform:scale(0.98); }
+        .btn-primary { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:#fff; box-shadow:0 4px 16px rgba(79,110,247,0.35); }
         .btn-ghost { background:transparent; color:var(--text2); border:1px solid var(--border) !important; margin-top:8px; }
-        .login-error { color:var(--red); font-size:13px; margin-bottom:8px; display:none; }
-        .login-divider { text-align:center; color:var(--text2); font-size:12px; margin:12px 0; position:relative; }
-        .login-divider::before,.login-divider::after { content:''; position:absolute; top:50%; width:40%; height:1px; background:var(--border); }
+        .btn-ghost:hover { background:var(--surface); }
+        .login-error { color:var(--red); font-size:13px; margin-bottom:10px; display:none; padding:8px 12px; background:rgba(239,68,68,0.1); border-radius:8px; border:1px solid rgba(239,68,68,0.2); }
+        .login-divider { text-align:center; color:var(--text2); font-size:12px; margin:14px 0; position:relative; }
+        .login-divider::before,.login-divider::after { content:''; position:absolute; top:50%; width:42%; height:1px; background:var(--border); }
         .login-divider::before { left:0; } .login-divider::after { right:0; }
 
         /* Header */
@@ -240,13 +245,15 @@
 <!-- Login -->
 <div id="login-overlay">
     <div class="login-box">
+        <div class="login-logo"><img src="/icon-192.png" alt="MiraRec"></div>
         <h1>MiraRec</h1>
+        <p class="login-subtitle">Mirrativ 録画管理</p>
         <div class="login-error" id="login-error"></div>
-        <input type="text" id="login-user" placeholder="Username" autocomplete="username">
-        <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password">
-        <button class="btn-primary" id="login-btn">Sign In</button>
-        <div class="login-divider">or</div>
-        <button class="btn-ghost" id="guest-btn">Continue as Guest</button>
+        <input type="text" id="login-user" placeholder="ユーザー名" autocomplete="username">
+        <input type="password" id="login-pass" placeholder="パスワード" autocomplete="current-password">
+        <button class="btn-primary" id="login-btn">ログイン</button>
+        <div class="login-divider">または</div>
+        <button class="btn-ghost" id="guest-btn">ゲストとして続ける</button>
     </div>
 </div>
 
@@ -485,7 +492,7 @@ document.getElementById('login-btn').onclick = async () => {
     try {
         const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
         const d=await r.json();
-        if(r.ok&&d.authenticated){currentRole=d.role;document.getElementById('login-overlay').classList.add('hidden');applyRole();loadAll();}
+        if(r.ok&&d.authenticated){currentRole=d.role;document.getElementById('login-overlay').classList.add('hidden');document.getElementById('filter-user').value='';applyRole();loadAll();}
         else{err.textContent=d.error||'Invalid';err.style.display='block';}
     }catch(e){err.textContent='Connection error';err.style.display='block';}
 };
@@ -1157,6 +1164,7 @@ async function loadAll() {
 }
 checkAuth().then(loadAll);
 setInterval(loadStorage, 30000);
+setInterval(()=>{ loadTargets().then(()=>{ if(currentTab==='recordings') renderRecordings(); }); if(currentTab==='recordings') loadRecordings(); }, 60000);
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 
 // WebSocket for real-time updates
@@ -1169,7 +1177,7 @@ function connectWS(){
         try{
             const msg=JSON.parse(e.data);
             switch(msg.type){
-                case 'recording_update': loadRecordings(); break;
+                case 'recording_update': loadTargets().then(()=>loadRecordings()); break;
                 case 'clip_update': loadClips(); break;
                 case 'target_update': loadTargets().then(()=>{ if(currentTab==='recordings') renderRecordings(); }); break;
                 case 'live_status': loadTargets().then(()=>{ if(currentTab==='recordings') renderRecordings(); }); break;
