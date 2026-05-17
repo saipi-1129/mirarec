@@ -211,6 +211,25 @@ cleanup_on_exit() {
 trap cleanup_on_exit INT TERM
 
 case "$1" in
+    start-loop)
+        # Docker用: 起動後に全ターゲットを開始し、30秒ごとに新ターゲットを検出して追加起動するループ
+        log "Starting in loop mode (Docker)..."
+        start_all
+        while true; do
+            sleep 30
+            targets=$(load_targets)
+            echo "$targets" | while read -r user_id _ci; do
+                [ -z "$user_id" ] && continue
+                pid_file="$PID_DIR/${user_id}.pid"
+                if [ ! -f "$pid_file" ]; then
+                    start_user_recording "$user_id"
+                elif ! kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                    rm -f "$pid_file"
+                    start_user_recording "$user_id"
+                fi
+            done
+        done
+        ;;
     start)
         if [ -n "$2" ]; then
             start_user_recording "$2"
