@@ -31,6 +31,12 @@ CLIP_DURATION_MAX = 300
 DISCORD_WEBHOOK    = os.environ.get("DISCORD_WEBHOOK", "")
 DISCORD_MAX_FILE_MB = 10
 
+# キーワード警報: カンマ区切りで複数指定可 (例: "ガチっす,がちっす")
+# 空欄の場合は警報機能を無効化
+ALERT_KEYWORDS_RAW = os.environ.get("ALERT_KEYWORDS", "ガチっす,がちっす")
+ALERT_KEYWORDS = [k.strip() for k in ALERT_KEYWORDS_RAW.split(",") if k.strip()]
+ALERT_MESSAGE  = os.environ.get("ALERT_MESSAGE", "🚨🌪️益子警報🌪️🚨")
+
 WEB_SERVER_URL = os.environ.get("WEB_SERVER_URL", "http://localhost:3001")
 PUBLIC_URL     = os.environ.get("PUBLIC_URL",     "https://mirrativ-record.saipi1129.com")
 
@@ -352,32 +358,34 @@ def main():
                 else:
                     send_discord(f"❌ 切り抜き作成に失敗しました (コマンド: {commenter})")
 
-            # 「ガチっす」警報
-            try:
-                conn2 = pymysql.connect(
-                    host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS,
-                    database=MYSQL_DB, connect_timeout=5, read_timeout=5,
-                )
-                cur2 = conn2.cursor()
-                cur2.execute(
-                    f"SELECT time, name, comment FROM {MYSQL_TABLE} "
-                    f"WHERE time > %s AND (comment LIKE %s OR comment LIKE %s) "
-                    f"ORDER BY time ASC",
-                    (last_check_time, '%ガチっす%', '%がちっす%'),
-                )
-                gachi_rows = cur2.fetchall()
-                conn2.close()
-                for grow in gachi_rows:
-                    gtime, commenter, comment = grow
-                    log(f"ガチっす検知: {commenter} -> {comment}")
-                    send_discord(f"🚨🌪️益子警報🌪️🚨\n`{commenter}`: {comment}")
-                if gachi_rows:
-                    new_t = max(row[0] for row in gachi_rows)
-                    if new_t > last_check_time:
-                        last_check_time = new_t
-                        save_last_check_time(last_check_time)
-            except Exception as e:
-                log(f"ガチっす check error: {e}")
+            # キーワード警報
+            if ALERT_KEYWORDS:
+                try:
+                    conn2 = pymysql.connect(
+                        host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS,
+                        database=MYSQL_DB, connect_timeout=5, read_timeout=5,
+                    )
+                    cur2 = conn2.cursor()
+                    conditions = " OR ".join(["comment LIKE %s"] * len(ALERT_KEYWORDS))
+                    params = [last_check_time] + [f"%{k}%" for k in ALERT_KEYWORDS]
+                    cur2.execute(
+                        f"SELECT time, name, comment FROM {MYSQL_TABLE} "
+                        f"WHERE time > %s AND ({conditions}) "
+                        f"ORDER BY time ASC",
+                        params,
+                    )
+                    alert_rows = cur2.fetchall()
+                    conn2.close()
+                    for atime, commenter, comment in alert_rows:
+                        log(f"キーワード検知: {commenter} -> {comment}")
+                        send_discord(f"{ALERT_MESSAGE}\n`{commenter}`: {comment}")
+                    if alert_rows:
+                        new_t = max(row[0] for row in alert_rows)
+                        if new_t > last_check_time:
+                            last_check_time = new_t
+                            save_last_check_time(last_check_time)
+                except Exception as e:
+                    log(f"キーワード警報 check error: {e}")
 
             if not rows and (datetime.now() - last_check_time).total_seconds() > 60:
                 last_check_time = datetime.now() - timedelta(seconds=2)
