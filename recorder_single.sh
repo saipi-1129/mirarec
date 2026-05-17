@@ -4,14 +4,23 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 CHECK_INTERVAL=30
-OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/data}"
-LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/recorder.log}"
+OUTPUT_DIR="${NAS_DIR:-$SCRIPT_DIR/data}"
+LOG_FILE="$SCRIPT_DIR/recorder.log"
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK_RECORDER:-}"
 
 # --- Functions ---
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [$1] $2" | tee -a "$LOG_FILE"
+}
+
+log_api() {
+    local url="$1" status="$2" elapsed="$3"
+    local endpoint="${url#https://www.mirrativ.com/api/}"
+    endpoint="${endpoint%%\?*}"
+    printf '{"ts":%s,"source":"recorder","endpoint":"%s","status":%s,"ms":%s,"user":"%s"}\n' \
+        "$(date +%s%3N)" "$endpoint" "$status" "$elapsed" "${USER_ID:-}" \
+        >> "$OUTPUT_DIR/.api_log" 2>/dev/null || true
 }
 
 send_discord() {
@@ -22,6 +31,24 @@ send_discord() {
          --header="User-Agent: MiraRec/1.0" \
          --post-data="$payload" \
          "$DISCORD_WEBHOOK" > /dev/null 2>&1 || true
+}
+
+queue_local_api_post() {
+    local endpoint="$1"
+    local label="$2"
+    local max_tries=5
+    local delay=2
+    local i
+    for i in $(seq 1 "$max_tries"); do
+        if wget -qO- --timeout=8 --tries=1 --method=POST "$endpoint" > /dev/null 2>&1; then
+            log "$USER_ID" "$label queued: ${BASE_FILENAME}.mp4 (try $i/$max_tries)"
+            return 0
+        fi
+        sleep "$delay"
+        delay=$((delay * 2))
+    done
+    log "$USER_ID" "WARNING: failed to queue $label after ${max_tries} tries: ${BASE_FILENAME}.mp4"
+    return 1
 }
 
 cleanup() {
@@ -108,9 +135,11 @@ else:
 
 # Check if stream is live via API
 check_stream_live() {
-    local api_url="$1"
-    local check_json
+    local api_url="$1" check_json _t0 _rc
+    _t0=$(date +%s%3N)
     check_json=$(wget -qO- --header="User-Agent: $USER_AGENT" --timeout=10 --tries=2 "$api_url" 2>/dev/null)
+    _rc=$?
+    log_api "$api_url" $((_rc==0?200:0)) $(($(date +%s%3N)-_t0))
     echo "$check_json" | python3 -c "import sys, json; print(json.load(sys.stdin).get('is_live', 0))" 2>/dev/null
 }
 
@@ -128,7 +157,8 @@ do_remux() {
 
     log "$USER_ID" "Remuxing to MP4..."
     ffmpeg -y -hide_banner -loglevel error \
-        -fflags +genpts+discardcorrupt \
+        -err_detect ignore_err \
+        -fflags +genpts+discardcorrupt+igndts \
         -i "$ts_file" \
         -c:v copy \
         -c:a aac -b:a 128k -af aresample=async=1000:first_pts=0 \
@@ -147,6 +177,15 @@ do_remux() {
                 rm -f "$tmp_fast" 2>/dev/null
             fi
         fi
+        # Verify the output MP4 is playable
+        if ! ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$mp4_file" > /dev/null 2>&1; then
+            log "$USER_ID" "Warning: MP4 validation failed (corrupt or unreadable)."
+            send_discord "⚠️ **変換後MP4が破損している可能性があります**
+🎬 \`$(basename "$mp4_file")\`
+👤 ${USER_NAME} / ${STREAM_TITLE}
+📁 ファイルは保存されましたが再生できない可能性があります"
+        fi
+
         log "$USER_ID" "Remux successful. Removing TS."
         rm -f "$ts_file"
         TEMP_TS=""
@@ -181,6 +220,9 @@ except: print('?')
     else
         log "$USER_ID" "Remux failed. Keeping TS."
         log "$USER_ID" "Saved: $ts_file"
+        send_discord "⚠️ **リマックス失敗**
+👤 ${USER_NAME} / ${STREAM_TITLE}
+📁 $(basename "$ts_file") のMP4変換に失敗しました（TSファイルは保持）"
         TEMP_TS=""
         return 1
     fi
@@ -193,8 +235,10 @@ while true; do
 
     # 1. Get Profile
     PROFILE_URL="https://www.mirrativ.com/api/user/profile?user_id=${USER_ID}"
+    _t0=$(date +%s%3N)
     PROFILE_JSON=$(wget -qO- --header="User-Agent: $USER_AGENT" --timeout=10 --tries=3 "$PROFILE_URL")
-    
+    _rc=$?; log_api "$PROFILE_URL" $((_rc==0?200:0)) $(($(date +%s%3N)-_t0))
+
     if [ -z "$PROFILE_JSON" ]; then
         log "$USER_ID" "Warning: Failed to fetch profile. Retrying in ${CHECK_INTERVAL}s..."
         sleep "$CHECK_INTERVAL"
@@ -216,12 +260,14 @@ print(live_id)
     if [ -n "$LIVE_ID" ]; then
         # 2. Get Stream Info
         STREAM_URL_API="https://www.mirrativ.com/api/live/get_streaming_url?live_id=${LIVE_ID}"
+        _t0=$(date +%s%3N)
         STREAM_JSON=$(wget -qO- --header="User-Agent: $USER_AGENT" --timeout=10 --tries=3 "$STREAM_URL_API")
+        _rc=$?; log_api "$STREAM_URL_API" $((_rc==0?200:0)) $(($(date +%s%3N)-_t0))
         
         IS_LIVE=$(echo "$STREAM_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin).get('is_live', 0))" 2>/dev/null)
         HLS_URL=$(echo "$STREAM_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin).get('streaming_url_hls', ''))" 2>/dev/null)
 
-        if [ "$IS_LIVE" == "1" ] && [ -n "$HLS_URL" ]; then
+        if [ -n "$HLS_URL" ]; then
             
             # Try to select highest quality variant
             BEST_VARIANT=$(select_best_stream "$HLS_URL")
@@ -368,6 +414,9 @@ EOF
                         log "$USER_ID" "File size stalled at ${CURRENT_SIZE} bytes (stall count: $STALL_COUNT/4)"
                         if [ "$STALL_COUNT" -ge 4 ]; then
                             log "$USER_ID" "ffmpeg stalled for 2+ minutes, restarting..."
+                            send_discord "⚠️ **録画ストール検知 → 再起動**
+👤 ${USER_NAME} / ${STREAM_TITLE}
+📁 $(basename "$CURRENT_SEGMENT") が2分間更新なし"
                             kill -INT "$FFMPEG_PID" 2>/dev/null
                             sleep 5
                             if kill -0 "$FFMPEG_PID" 2>/dev/null; then
@@ -416,6 +465,9 @@ EOF
                     RETRY_COUNT=$((RETRY_COUNT + 1))
                     if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
                         log "$USER_ID" "Max retries ($MAX_RETRIES) reached. Giving up."
+                        send_discord "❌ **録画断念**
+👤 ${USER_NAME} / ${STREAM_TITLE}
+⚠️ ffmpegが ${MAX_RETRIES} 回連続で失敗しました。配信は継続中の可能性があります。"
                         STREAM_ENDED=true
                         break
                     fi
@@ -481,11 +533,11 @@ EOF
             # Remux
             do_remux "$TEMP_TS" "$FINAL_MP4" "$FINAL_JSON" "$BASE_FILENAME"
 
-            # Queue transcription via server API
+            # Queue transcription and detect via server API
             if [ -f "$FINAL_MP4" ]; then
                 ENCODED_MP4=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${BASE_FILENAME}.mp4'))" 2>/dev/null)
-                wget -qO- --method=POST "http://localhost:3001/api/transcriptions/${ENCODED_MP4}" > /dev/null 2>&1 &
-                log "$USER_ID" "Transcription queued: ${BASE_FILENAME}.mp4"
+                queue_local_api_post "http://localhost:3001/api/transcriptions/${ENCODED_MP4}" "Transcription"
+                queue_local_api_post "http://localhost:3001/api/detect/${ENCODED_MP4}" "Detect (interval=2)"
             fi
 
             log "$USER_ID" "Waiting for next stream..."

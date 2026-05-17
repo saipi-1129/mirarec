@@ -15,6 +15,7 @@ import secrets
 import hashlib
 import http.cookies
 import asyncio
+import collections
 import pymysql
 
 try:
@@ -46,12 +47,54 @@ PID_DIR = os.environ.get('PID_DIR', os.path.join(BASE_DIR, '../pids'))
 MANAGER_SCRIPT = os.environ.get('MANAGER_SCRIPT', os.path.join(BASE_DIR, '../manage_recordings.sh'))
 THUMBNAILS_DIR = os.path.join(NAS_DIR, 'images')
 CLIPS_DIR = os.path.join(NAS_DIR, 'clips')
+API_LOG_FILE = os.path.join(NAS_DIR, '.api_log')
 
 # Ensure directories exist
 os.makedirs(NAS_DIR, exist_ok=True)
 os.makedirs(PID_DIR, exist_ok=True)
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 os.makedirs(CLIPS_DIR, exist_ok=True)
+
+# --- API call monitoring ---
+_api_log = collections.deque(maxlen=300)
+_api_log_lock = threading.Lock()
+
+def _add_api_log(entry):
+    with _api_log_lock:
+        _api_log.append(entry)
+    ws_broadcast('api_log', entry)
+
+def _log_api(source, url, status, elapsed_ms, user_id=''):
+    endpoint = url.replace('https://www.mirrativ.com/api/', '').split('?')[0]
+    entry = {
+        'ts': int(time.time() * 1000),
+        'source': source,
+        'endpoint': endpoint,
+        'status': status,
+        'ms': round(elapsed_ms),
+        'user': str(user_id),
+    }
+    _add_api_log(entry)
+
+def api_log_file_watcher():
+    """Watch .api_log file written by recorder_single.sh and import entries."""
+    last_pos = 0
+    while True:
+        try:
+            if os.path.exists(API_LOG_FILE):
+                with open(API_LOG_FILE) as f:
+                    f.seek(last_pos)
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                _add_api_log(json.loads(line))
+                            except Exception:
+                                pass
+                    last_pos = f.tell()
+        except Exception:
+            pass
+        time.sleep(3)
 
 # Authentication
 ADMIN_USERNAME = os.environ.get('ADMIN_USER', 'admin')
@@ -65,6 +108,8 @@ sessions_lock = threading.Lock()
 # Transcription jobs: {filename: {'status': 'pending'|'processing'|'done'|'error', 'segments': [...], 'error': str}}
 transcription_jobs = {}
 transcription_lock = threading.Lock()
+TRANSCRIPTION_MAX_CONCURRENCY = max(1, int(os.environ.get('TRANSCRIPTION_MAX_CONCURRENCY', '1')))
+transcription_slots = threading.Semaphore(TRANSCRIPTION_MAX_CONCURRENCY)
 TRANSCRIPTS_DIR = os.path.join(NAS_DIR, 'transcripts')
 os.makedirs(TRANSCRIPTS_DIR, exist_ok=True)
 
@@ -80,11 +125,106 @@ def send_discord(message):
     except Exception:
         pass
 
+def _fmt_secs(secs):
+    h = int(secs // 3600)
+    m = int((secs % 3600) // 60)
+    s = int(secs % 60)
+    return f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
+
+def auto_detect_and_notify(filename, interval=2):
+    """録画終了後に自動でdetectを実行し、Discord通知する"""
+    video_path = os.path.join(NAS_DIR, filename)
+    if not os.path.exists(video_path):
+        print(f'[AUTO_DETECT] file not found: {filename}')
+        return
+
+    job_key = f'{filename}::i{interval}'
+    cache_dir = os.path.join(NAS_DIR, '.detect_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, filename + f'.i{interval}.json')
+
+    # すでに有効なキャッシュがあればスキップ
+    if os.path.exists(cache_file):
+        mtime_vid = os.path.getmtime(video_path)
+        if os.path.getmtime(cache_file) > mtime_vid:
+            print(f'[AUTO_DETECT] cache hit, skipping: {filename}')
+            return
+
+    # すでに実行中ならスキップ
+    with detect_jobs_lock:
+        existing = detect_jobs.get(job_key)
+        if existing and existing.get('status') == 'running':
+            print(f'[AUTO_DETECT] job already running: {filename}')
+            return
+
+    print(f'[AUTO_DETECT] starting: {filename} interval={interval}')
+    job = {'status': 'running', 'progress_done': 0, 'progress_total': 1, 'result': None, 'error': None}
+    with detect_jobs_lock:
+        detect_jobs[job_key] = job
+
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detect_mirrativ.py')
+    try:
+        proc = subprocess.Popen(
+            ['python3', script, video_path, str(interval)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        def _read_stderr():
+            for line in proc.stderr:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    p = json.loads(line)
+                    with detect_jobs_lock:
+                        detect_jobs[job_key]['progress_done'] = p.get('done', 0)
+                        detect_jobs[job_key]['progress_total'] = p.get('total', 1)
+                except Exception:
+                    pass
+        t = threading.Thread(target=_read_stderr, daemon=True)
+        t.start()
+        stdout = proc.stdout.read()
+        proc.wait(timeout=3600)
+        t.join()
+        if proc.returncode != 0:
+            with detect_jobs_lock:
+                detect_jobs[job_key]['status'] = 'error'
+                detect_jobs[job_key]['error'] = '解析スクリプトがエラーで終了しました'
+            send_discord(f'❌ **自動検出失敗** `{filename}`\n解析スクリプトエラー')
+            return
+        data = json.loads(stdout)
+        with open(cache_file, 'w') as f:
+            json.dump(data, f)
+        with detect_jobs_lock:
+            detect_jobs[job_key]['status'] = 'done'
+            detect_jobs[job_key]['result'] = data
+
+        segs = data.get('segments', [])
+        dur = data.get('duration', 0)
+        if segs:
+            lines = [f'🔍 **画面検出完了** `{filename}`',
+                     f'動画: {_fmt_secs(dur)} / **{len(segs)}件** の非ミラティブ画面を検出']
+            for seg in segs[:10]:
+                length = round(seg['end'] - seg['start'])
+                lines.append(f'  • {_fmt_secs(seg["start"])} 〜 {_fmt_secs(seg["end"])} ({length}秒)')
+            if len(segs) > 10:
+                lines.append(f'  …他{len(segs) - 10}件')
+            send_discord('\n'.join(lines))
+        else:
+            send_discord(f'✅ **画面検出完了** `{filename}`\nミラティブ以外の画面は検出されませんでした')
+    except Exception as e:
+        with detect_jobs_lock:
+            detect_jobs[job_key]['status'] = 'error'
+            detect_jobs[job_key]['error'] = str(e)
+        send_discord(f'❌ **自動検出エラー** `{filename}`\n{e}')
+
 def run_transcription(filepath, filename):
     transcript_path = os.path.join(TRANSCRIPTS_DIR, filename + '.json')
     with transcription_lock:
-        transcription_jobs[filename] = {'status': 'processing', 'segments': []}
+        transcription_jobs[filename] = {'status': 'queued', 'segments': []}
+    transcription_slots.acquire()
     try:
+        with transcription_lock:
+            transcription_jobs[filename] = {'status': 'processing', 'segments': []}
         from faster_whisper import WhisperModel
         model = WhisperModel('medium', device='cpu', compute_type='int8')
         segments_iter, info = model.transcribe(
@@ -118,6 +258,8 @@ def run_transcription(filepath, filename):
         print(f"Transcription error for {filename}: {e}")
         with transcription_lock:
             transcription_jobs[filename] = {'status': 'error', 'segments': [], 'error': str(e)}
+    finally:
+        transcription_slots.release()
 
 # Live comments cache: {filename: {'comments': [...], 'highlights': [...]}}
 livecomments_cache = {}
@@ -126,7 +268,7 @@ livecomments_lock = threading.Lock()
 MENTAKO_USER_ID = os.environ.get('MENTAKO_USER_ID', '')
 
 def fetch_live_comments_db(start_time_ms, duration_s):
-    """Fetch comments from MySQL `comments` table (for users with direct MySQL comment integration)."""
+    """Fetch comments from MySQL (めんたこ専用)."""
     import datetime
     start_utc = datetime.datetime.fromtimestamp(start_time_ms / 1000, tz=datetime.timezone.utc)
     start_jst = start_utc + datetime.timedelta(hours=9)
@@ -181,11 +323,14 @@ def fetch_live_comments_api(live_id, start_time_ms, duration_s):
     """Fetch comments from Mirrativ API for non-めんたこ users."""
     USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     start_s = start_time_ms / 1000
+    url = f'https://www.mirrativ.com/api/live/live_comments?live_id={live_id}'
     comments = []
+    t0 = time.time()
+    status = 0
     try:
-        url = f'https://www.mirrativ.com/api/live/live_comments?live_id={live_id}'
         req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
         with urllib.request.urlopen(req, timeout=10) as r:
+            status = r.status
             data = json.loads(r.read())
         for c in data.get('comments', []):
             rel = float(c.get('created_at', 0)) - start_s
@@ -194,7 +339,10 @@ def fetch_live_comments_api(live_id, start_time_ms, duration_s):
             comments.append({'time': round(rel, 1), 'user': c.get('user_name', ''), 'text': c.get('comment', '')})
         comments.sort(key=lambda x: x['time'])
     except Exception as e:
+        status = -1
         print(f"API error fetching comments: {e}")
+    finally:
+        _log_api('server', url, status, (time.time() - t0) * 1000)
     return comments, detect_comment_highlights(comments)
 
 def detect_comment_highlights(comments, window=30, top_n=5):
@@ -234,12 +382,16 @@ def _ensure_comment_table(db, user_id):
     db.commit()
 
 def _fetch_and_store_comments(live_id, user_id):
+    url = f'https://www.mirrativ.com/api/live/live_comments?live_id={live_id}'
+    t0 = time.time()
+    status = 0
     try:
-        url = f'https://www.mirrativ.com/api/live/live_comments?live_id={live_id}'
         req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT_COLLECT})
         with urllib.request.urlopen(req, timeout=10) as r:
+            status = r.status
             data = json.loads(r.read())
         comments = data.get('comments', [])
+        _log_api('collector', url, status, (time.time() - t0) * 1000, user_id)
         if not comments:
             return 0
         db = get_db()
@@ -261,6 +413,8 @@ def _fetch_and_store_comments(live_id, user_id):
         print(f"[COMMENT_COLLECTOR] {live_id} ({user_id}): +{inserted}/{len(comments)}")
         return inserted
     except Exception as e:
+        status = -1
+        _log_api('collector', url, status, (time.time() - t0) * 1000, user_id)
         print(f"[COMMENT_COLLECTOR] error {live_id}: {e}")
         return 0
 
@@ -289,14 +443,14 @@ def comment_collector_loop():
                 user_id = meta.get('user_id', '')
                 if not live_id or not user_id:
                     continue
-                if MENTAKO_USER_ID and user_id == MENTAKO_USER_ID:
-                    continue  # comments are stored via direct MySQL integration
+                if user_id == MENTAKO_USER_ID:
+                    continue  # めんたこはMySQLに別途保存済み
                 current.add(live_id)
                 now = time.time()
                 with _collector_lock:
                     state = _collector_state.get(live_id)
                     if state is None:
-                        _collector_state[live_id] = {'user_id': user_id, 'last_fetched': 0}
+                        _collector_state[live_id] = {'user_id': user_id, 'last_fetched': 0, 'filename': fname}
                         state = _collector_state[live_id]
                     if now - state['last_fetched'] >= INTERVAL:
                         state['last_fetched'] = now
@@ -309,6 +463,10 @@ def comment_collector_loop():
                     info = _collector_state.pop(live_id)
                     threading.Thread(target=_fetch_and_store_comments, args=(live_id, info['user_id']), daemon=True).start()
                     print(f"[COMMENT_COLLECTOR] stream ended, final fetch: {live_id}")
+                    if info.get('filename'):
+                        fname_ended = info['filename']
+                        threading.Thread(target=auto_detect_and_notify, args=(fname_ended,), daemon=True).start()
+                        print(f"[AUTO_DETECT] queued: {fname_ended}")
         except Exception as e:
             print(f"[COMMENT_COLLECTOR] loop error: {e}")
         time.sleep(CHECK_EVERY)
@@ -337,6 +495,54 @@ def _save_share_tokens(tokens):
         pass
 
 share_tokens = _load_share_tokens()
+
+# Detect jobs: {filename: {status, progress_done, progress_total, result, error}}
+detect_jobs = {}
+detect_jobs_lock = threading.Lock()
+
+# Metadata index cache (filename/live_id -> recording meta)
+_meta_index_cache = {'data': None, 'mtime': 0}
+_meta_index_lock = threading.Lock()
+
+def _get_metadata_index():
+    with _meta_index_lock:
+        try:
+            dir_mtime = os.path.getmtime(NAS_DIR)
+        except Exception:
+            dir_mtime = 0
+        if _meta_index_cache['data'] is not None and dir_mtime <= _meta_index_cache['mtime']:
+            return _meta_index_cache['data']
+        by_filename, by_live_id, sorted_by_start = {}, {}, []
+        try:
+            for fname in os.listdir(NAS_DIR):
+                if not fname.endswith('.json') or fname.startswith('.'):
+                    continue
+                try:
+                    with open(os.path.join(NAS_DIR, fname), encoding='utf-8') as f:
+                        d = json.load(f)
+                    meta = {
+                        'filename': d.get('filename', ''),
+                        'user_id': str(d.get('user_id', '')),
+                        'user_name': d.get('user_name', ''),
+                        'title': d.get('title', ''),
+                        'start_time': int(d.get('start_time', 0)),
+                        'live_id': d.get('live_id', ''),
+                    }
+                    if meta['filename']:
+                        by_filename[meta['filename']] = meta
+                    if meta['live_id']:
+                        by_live_id[meta['live_id']] = meta
+                    if meta['start_time']:
+                        sorted_by_start.append(meta)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        sorted_by_start.sort(key=lambda m: m['start_time'])
+        data = {'by_filename': by_filename, 'by_live_id': by_live_id, 'sorted_by_start': sorted_by_start}
+        _meta_index_cache['data'] = data
+        _meta_index_cache['mtime'] = dir_mtime
+        return data
 
 # Global cache for dir size
 _dir_size_cache = {'size': 0, 'last_updated': 0}
@@ -404,8 +610,6 @@ def update_dir_size_loop():
         time.sleep(60) # Update every minute
 
 def run_command(cmd):
-    if not MANAGER_SCRIPT:
-        return True  # Docker mode: recorder container manages processes
     try:
         subprocess.run(cmd, shell=True, check=True)
         return True
@@ -430,18 +634,18 @@ def get_duration(file_path):
         return 0
 
 def get_user_info(user_id):
-    # Simple cache could be added here
     url = f"https://www.mirrativ.com/api/user/profile?user_id={user_id}"
+    t0 = time.time()
+    status = 0
     try:
         cmd = ['wget', '-qO-', '--header=User-Agent: Mozilla/5.0', '--timeout=10', '--tries=2', url]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        status = 200 if result.returncode == 0 else 0
         data = json.loads(result.stdout)
-        
         onlive = data.get('onlive')
         live_thumbnail = None
         if onlive:
             live_thumbnail = onlive.get('thumbnail_image_url') or onlive.get('image_url')
-
         return {
             'userId': user_id,
             'name': data.get('name', f"User_{user_id}"),
@@ -449,8 +653,11 @@ def get_user_info(user_id):
             'live_thumbnail': live_thumbnail
         }
     except Exception as e:
+        status = -1
         print(f"Error fetching user info: {e}")
         return None
+    finally:
+        _log_api('server', url, status, (time.time() - t0) * 1000, user_id)
 
 def check_live_status(user_id):
     pid_file = os.path.join(PID_DIR, f"{user_id}.pid")
@@ -486,6 +693,16 @@ def save_targets(targets):
 def datetime_iso():
     from datetime import datetime
     return datetime.now().isoformat()
+
+_MIRRATIV_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+_HLS_PROXY_HOSTS = ('mirrativ.com', 'cloudfront.net', 'fastly.net', 'akamaihd.net', 'limelight.com', 'lldns.net')
+
+def _is_allowed_proxy_url(url):
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower().split(':')[0]
+        return any(host == h or host.endswith('.' + h) for h in _HLS_PROXY_HOSTS)
+    except Exception:
+        return False
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -539,6 +756,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if path == '/api/auth/status':
             self.handle_auth_status()
+        elif path == '/api/search':
+            self.handle_search(parsed.query)
+        elif path.startswith('/api/user-avatar/'):
+            user_id = path[len('/api/user-avatar/'):]
+            self.handle_user_avatar(user_id)
         elif path == '/api/recordings':
             self.handle_recordings()
         elif path == '/api/targets':
@@ -549,8 +771,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.handle_system_logs()
+        elif path == '/api/admin/api-log':
+            if not self.require_admin():
+                return
+            self.handle_api_log_get()
         elif path == '/api/clips':
             self.handle_clips_get()
+        elif path == '/api/internal/clip-created' and self.client_address[0] in ('127.0.0.1', '::1', 'localhost'):
+            ws_broadcast('clip_update')
+            self.send_json({'ok': True})
         elif path.startswith('/api/clip-comments/'):
             filename = urllib.parse.unquote(path.split('/api/clip-comments/')[1])
             self.handle_clip_comments_get(filename)
@@ -560,9 +789,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.startswith('/api/duration/'):
             filename = urllib.parse.unquote(path.split('/api/duration/')[1])
             self.handle_duration(filename)
+        elif path.startswith('/api/recordings/') and path.endswith('/subtitles'):
+            filename = urllib.parse.unquote(path[len('/api/recordings/'):-len('/subtitles')])
+            self.handle_subtitles(filename, parsed.query)
         elif path.startswith('/api/recordings/') and path.endswith('/livecomments'):
             filename = urllib.parse.unquote(path[len('/api/recordings/'):-len('/livecomments')])
             self.handle_livecomments(filename)
+        elif path.startswith('/api/recordings/') and path.endswith('/detect/status'):
+            filename = urllib.parse.unquote(path[len('/api/recordings/'):-len('/detect/status')])
+            self.handle_detect_status(filename)
+        elif path.startswith('/api/recordings/') and path.endswith('/detect'):
+            filename = urllib.parse.unquote(path[len('/api/recordings/'):-len('/detect')])
+            self.handle_detect_screen(filename, parsed.query)
+        elif path.startswith('/api/detect-frame/'):
+            filename = urllib.parse.unquote(path[len('/api/detect-frame/'):])
+            self.handle_detect_frame(filename, parsed.query)
         elif path.startswith('/api/clip-thumbnails/'):
             filename = urllib.parse.unquote(path.split('/')[-1])
             self.handle_clip_thumbnail(filename)
@@ -580,14 +821,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.startswith('/video/'):
             filename = urllib.parse.unquote(path.split('/')[-1])
             self.handle_video(filename)
+        elif path == '/api/hls-proxy':
+            self.handle_hls_proxy(parsed.query)
+        elif path.startswith('/api/live-stream-url/'):
+            filename = urllib.parse.unquote(path[len('/api/live-stream-url/'):])
+            self.handle_live_stream_url(filename)
         elif path.startswith('/api/thumbnails/'):
             filename = urllib.parse.unquote(path.split('/')[-1])
             self.handle_thumbnail(filename)
         elif path == '/':
             self.path = '/index.html'
-            super().do_GET()
+            self._serve_no_cache()
+        elif path.endswith('.html') or path.endswith('.js') or path.endswith('.css'):
+            self._serve_no_cache()
         else:
             super().do_GET()
+
+    def _serve_no_cache(self):
+        """HTMLやJSファイルをno-cacheヘッダー付きで配信"""
+        import mimetypes
+        fs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static',
+                               self.path.lstrip('/'))
+        if not os.path.exists(fs_path):
+            return self.send_error(404)
+        ctype = mimetypes.guess_type(fs_path)[0] or 'text/html'
+        with open(fs_path, 'rb') as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', ctype + '; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -615,6 +881,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         elif path.startswith('/api/transcriptions/'):
             filename = urllib.parse.unquote(path.split('/api/transcriptions/')[1])
             self.handle_transcription_start(filename)
+        elif path.startswith('/api/detect/'):
+            filename = urllib.parse.unquote(path[len('/api/detect/'):])
+            self.handle_detect_trigger(filename)
         elif path.endswith('/share') and path.startswith('/api/clips/'):
             filename = urllib.parse.unquote(path.split('/')[3])
             self.handle_clip_share(filename)
@@ -664,6 +933,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             comment_id = path.split('/api/clip-comments/')[1]
             self.handle_clip_comment_delete(comment_id)
         elif path.startswith('/api/clips/'):
+            if not self.require_admin():
+                return
             filename = urllib.parse.unquote(path.split('/')[3])
             self.handle_clip_delete(filename)
         else:
@@ -746,6 +1017,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
         except Exception as e:
             self.send_error(500, str(e))
+
+    def handle_api_log_get(self):
+        cutoff = int(time.time() * 1000) - 10 * 60 * 1000  # 直近10分のみ
+        with _api_log_lock:
+            data = [e for e in _api_log if e['ts'] >= cutoff]
+        self.send_json(data)
 
     def handle_system_logs(self):
         log_file = os.path.join(BASE_DIR, '../recorder.log')
@@ -835,6 +1112,223 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         threading.Thread(target=run_transcription, args=(filepath, filename), daemon=True).start()
         self.send_json({'status': 'pending'})
 
+    def handle_user_avatar(self, user_id):
+        """GET /api/user-avatar/<user_id> — ディスクキャッシュ付きアバター画像プロキシ"""
+        if not user_id or not re.match(r'^\d+$', user_id):
+            return self.send_error(400)
+        cache_dir = os.path.join(NAS_DIR, '.avatar_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f'{user_id}.jpg')
+        # キャッシュが7日以内なら返す
+        if os.path.exists(cache_path) and time.time() - os.path.getmtime(cache_path) < 604800:
+            with open(cache_path, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', len(data))
+            self.send_header('Cache-Control', 'max-age=86400')
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        # Mirrativ APIからアバターURL取得
+        try:
+            info = get_user_info(user_id)
+            avatar_url = info['avatar'] if info else None
+            if not avatar_url:
+                return self.send_error(404)
+            cmd = ['wget', '-qO-', f'--header=User-Agent: {_MIRRATIV_UA}', '--timeout=10', avatar_url]
+            result = subprocess.run(cmd, capture_output=True, timeout=15)
+            if result.returncode != 0 or not result.stdout:
+                return self.send_error(502)
+            img_data = result.stdout
+            with open(cache_path, 'wb') as f:
+                f.write(img_data)
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', len(img_data))
+            self.send_header('Cache-Control', 'max-age=86400')
+            self.end_headers()
+            self.wfile.write(img_data)
+        except Exception as e:
+            print(f'[AVATAR] {user_id}: {e}')
+            self.send_error(502)
+
+    def handle_search(self, query_string):
+        """GET /api/search?q=<query>&type=all|transcript|comment"""
+        params = urllib.parse.parse_qs(query_string)
+        q = params.get('q', [''])[0].strip()
+        search_type = params.get('type', ['all'])[0]
+        if len(q) < 1:
+            return self.send_json([])
+
+        is_guest = self.get_session_role() != 'admin'
+        idx = _get_metadata_index()
+        by_filename = idx['by_filename']
+        by_live_id = idx['by_live_id']
+        sorted_by_start = idx['sorted_by_start']
+        like_q = f'%{q}%'
+        results = []
+
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+
+            # --- 字幕検索 ---
+            if search_type in ('all', 'transcript'):
+                cur.execute('SELECT filename, segments FROM transcripts WHERE segments LIKE %s LIMIT 500', (like_q,))
+                for filename, segs_json in cur.fetchall():
+                    meta = by_filename.get(filename)
+                    if is_guest and (not meta or meta['user_id'] != MENTAKO_USER_ID):
+                        continue
+                    try:
+                        segs_data = json.loads(segs_json) if isinstance(segs_json, str) else segs_json
+                        if isinstance(segs_data, dict):
+                            segs_data = segs_data.get('segments', [])
+                        for seg in segs_data:
+                            text = seg.get('text', '')
+                            if q.lower() in text.lower():
+                                t = seg.get('start', 0)
+                                results.append({
+                                    'type': 'transcript',
+                                    'filename': filename,
+                                    'user_id': meta['user_id'] if meta else '',
+                                    'user_name': meta['user_name'] if meta else '',
+                                    'title': meta['title'] if meta else '',
+                                    'time': t,
+                                    'text': text.strip(),
+                                    '_abs_time': (meta['start_time'] if meta else 0) + t * 1000,
+                                })
+                    except Exception:
+                        pass
+
+            # --- コメント検索 ---
+            if search_type in ('all', 'comment'):
+                import datetime as _dt
+
+                # めんたこ専用 comments テーブル (datetime型)
+                cur.execute(
+                    'SELECT time, name, comment FROM comments WHERE comment LIKE %s ORDER BY time DESC LIMIT 200',
+                    (like_q,)
+                )
+                for comment_dt, uname, comment in cur.fetchall():
+                    ts_ms = comment_dt.timestamp() * 1000
+                    meta = None
+                    for m in reversed(sorted_by_start):
+                        if m['user_id'] == MENTAKO_USER_ID and m['start_time'] <= ts_ms:
+                            meta = m
+                            break
+                    rel = round((ts_ms - meta['start_time']) / 1000, 1) if meta else None
+                    results.append({
+                        'type': 'comment',
+                        'filename': meta['filename'] if meta else None,
+                        'user_id': MENTAKO_USER_ID,
+                        'user_name': uname,
+                        'title': meta['title'] if meta else '',
+                        'time': rel,
+                        'text': comment,
+                        '_abs_time': ts_ms,
+                    })
+
+                # 各ユーザーの live_comments_* テーブル (adminのみ)
+                if not is_guest:
+                    cur.execute("SHOW TABLES LIKE 'live_comments_%'")
+                    tables = [r[0] for r in cur.fetchall()]
+                    for table in tables:
+                        streamer_user_id = table[len('live_comments_'):]
+                        cur.execute(
+                            f'SELECT live_id, user_name, comment, comment_time FROM `{table}` WHERE comment LIKE %s ORDER BY comment_time DESC LIMIT 100',
+                            (like_q,)
+                        )
+                        for live_id, uname, comment, ctime in cur.fetchall():
+                            meta = by_live_id.get(live_id)
+                            rel = round(ctime - meta['start_time'] / 1000, 1) if meta else None
+                            results.append({
+                                'type': 'comment',
+                                'filename': meta['filename'] if meta else None,
+                                'user_id': streamer_user_id,
+                                'user_name': uname,
+                                'title': meta['title'] if meta else '',
+                                'time': rel,
+                                'text': comment,
+                                '_abs_time': ctime * 1000,
+                            })
+
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f'[SEARCH] error: {e}')
+            import traceback; traceback.print_exc()
+
+        results.sort(key=lambda r: (r.pop('_abs_time', 0)), reverse=True)
+        self.send_json(results[:200])
+
+    def handle_detect_trigger(self, filename):
+        """POST /api/detect/<filename>: 認証不要の内部detectトリガー（recorder_single.shから呼び出す）"""
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        video_path = os.path.join(NAS_DIR, filename)
+        if not os.path.exists(video_path):
+            return self.send_error(404)
+        threading.Thread(target=auto_detect_and_notify, args=(filename, 2), daemon=True).start()
+        self.send_json({'status': 'queued', 'filename': filename})
+
+    def handle_subtitles(self, filename, query_string):
+        """GET /api/recordings/<filename>/subtitles?format=srt|vtt"""
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        params = urllib.parse.parse_qs(query_string)
+        fmt = params.get('format', ['srt'])[0].lower()
+        if fmt not in ('srt', 'vtt'):
+            return self.send_error(400)
+
+        transcript_path = os.path.join(TRANSCRIPTS_DIR, filename + '.json')
+        if not os.path.exists(transcript_path):
+            return self.send_error(404)
+        try:
+            with open(transcript_path, encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            return self.send_error(500)
+
+        segs = data if isinstance(data, list) else data.get('segments', [])
+
+        def fmt_time_srt(s):
+            h = int(s // 3600)
+            m = int((s % 3600) // 60)
+            sec = int(s % 60)
+            ms = int(round((s - int(s)) * 1000))
+            return f'{h:02d}:{m:02d}:{sec:02d},{ms:03d}'
+
+        def fmt_time_vtt(s):
+            return fmt_time_srt(s).replace(',', '.')
+
+        if fmt == 'srt':
+            lines = []
+            for i, seg in enumerate(segs, 1):
+                lines.append(str(i))
+                lines.append(f'{fmt_time_srt(seg["start"])} --> {fmt_time_srt(seg["end"])}')
+                lines.append(seg.get('text', '').strip())
+                lines.append('')
+            body = '\n'.join(lines).encode('utf-8')
+            content_type = 'text/plain; charset=utf-8'
+            dl_name = filename + '.srt'
+        else:
+            lines = ['WEBVTT', '']
+            for seg in segs:
+                lines.append(f'{fmt_time_vtt(seg["start"])} --> {fmt_time_vtt(seg["end"])}')
+                lines.append(seg.get('text', '').strip())
+                lines.append('')
+            body = '\n'.join(lines).encode('utf-8')
+            content_type = 'text/vtt; charset=utf-8'
+            dl_name = filename + '.vtt'
+
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', len(body))
+        self.send_header('Content-Disposition', f'attachment; filename="{dl_name}"')
+        self.end_headers()
+        self.wfile.write(body)
+
     def handle_duration(self, filename):
         if not filename or '/' in filename or '\\' in filename or '..' in filename:
             return self.send_error(400)
@@ -865,7 +1359,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         duration_s = get_duration(os.path.join(NAS_DIR, filename)) or 7200
         user_id = meta.get('user_id', '')
         live_id = meta.get('live_id', '')
-        if MENTAKO_USER_ID and user_id == MENTAKO_USER_ID:
+        if user_id == MENTAKO_USER_ID:
             comments, highlights = fetch_live_comments_db(start_time_ms, duration_s)
         else:
             comments, highlights = fetch_live_comments_collected(live_id, user_id, start_time_ms)
@@ -875,6 +1369,167 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         with livecomments_lock:
             livecomments_cache[filename] = result
         self.send_json(result)
+
+    def handle_detect_screen(self, filename, query_string):
+        """POST/GET: 解析ジョブを開始し、現在の状態を返す"""
+        if not self.require_admin():
+            return
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        video_path = os.path.join(NAS_DIR, filename)
+        if not os.path.exists(video_path):
+            return self.send_error(404)
+
+        params = urllib.parse.parse_qs(query_string)
+        interval = int(params.get('interval', ['10'])[0])
+        interval = max(1, min(60, interval))
+        force = params.get('force', ['0'])[0] == '1'
+        job_key = f'{filename}::i{interval}'
+
+        # force時は既存ジョブとキャッシュを削除
+        if force:
+            with detect_jobs_lock:
+                detect_jobs.pop(job_key, None)
+            cache_dir = os.path.join(NAS_DIR, '.detect_cache')
+            cache_file = os.path.join(cache_dir, filename + f'.i{interval}.json')
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+        else:
+            with detect_jobs_lock:
+                job = detect_jobs.get(job_key)
+                if job:
+                    return self.send_json(job)
+
+        # キャッシュ確認
+        cache_dir = os.path.join(NAS_DIR, '.detect_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, filename + f'.i{interval}.json')
+        if not force and os.path.exists(cache_file):
+            mtime_vid = os.path.getmtime(video_path)
+            if os.path.getmtime(cache_file) > mtime_vid:
+                try:
+                    with open(cache_file) as f:
+                        data = json.load(f)
+                    job = {'status': 'done', 'progress_done': 1, 'progress_total': 1, 'result': data}
+                    with detect_jobs_lock:
+                        detect_jobs[job_key] = job
+                    return self.send_json(job)
+                except Exception:
+                    pass
+
+        # 新規ジョブ開始
+        job = {'status': 'running', 'progress_done': 0, 'progress_total': 1, 'result': None, 'error': None}
+        with detect_jobs_lock:
+            detect_jobs[job_key] = job
+
+        def run_job():
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'detect_mirrativ.py')
+            try:
+                proc = subprocess.Popen(
+                    ['python3', script, video_path, str(interval)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+                # stderrを別スレッドで読み進捗更新
+                def read_stderr():
+                    for line in proc.stderr:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            p = json.loads(line)
+                            with detect_jobs_lock:
+                                detect_jobs[job_key]['progress_done'] = p.get('done', 0)
+                                detect_jobs[job_key]['progress_total'] = p.get('total', 1)
+                        except Exception:
+                            pass
+                t = threading.Thread(target=read_stderr, daemon=True)
+                t.start()
+                # communicate()はstderrも読むため競合する。stdout.read()で代替。
+                stdout = proc.stdout.read()
+                proc.wait(timeout=900)
+                t.join()
+                if proc.returncode != 0:
+                    with detect_jobs_lock:
+                        detect_jobs[job_key]['status'] = 'error'
+                        detect_jobs[job_key]['error'] = '解析スクリプトがエラーで終了しました'
+                    return
+                data = json.loads(stdout)
+                with open(cache_file, 'w') as f:
+                    json.dump(data, f)
+                with detect_jobs_lock:
+                    detect_jobs[job_key]['status'] = 'done'
+                    detect_jobs[job_key]['result'] = data
+            except Exception as e:
+                with detect_jobs_lock:
+                    detect_jobs[job_key]['status'] = 'error'
+                    detect_jobs[job_key]['error'] = str(e)
+
+        threading.Thread(target=run_job, daemon=True).start()
+        self.send_json(job)
+
+    def handle_detect_status(self, filename):
+        """GET: ジョブの現在状態を返す"""
+        if not self.require_admin():
+            return
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        # クエリを再パース (pathから取れないのでURLそのものから取る)
+        raw = self.path.split('?', 1)
+        qs = raw[1] if len(raw) > 1 else ''
+        params = urllib.parse.parse_qs(qs)
+        interval = int(params.get('interval', ['10'])[0])
+        interval = max(1, min(60, interval))
+        job_key = f'{filename}::i{interval}'
+        with detect_jobs_lock:
+            job = detect_jobs.get(job_key)
+        if not job:
+            return self.send_json({'status': 'none'})
+        self.send_json(job)
+
+    def handle_detect_frame(self, filename, query_string):
+        """GET: 指定時刻のフレームをJPEGで返す"""
+        if not self.require_admin():
+            return
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        video_path = os.path.join(NAS_DIR, filename)
+        if not os.path.exists(video_path):
+            return self.send_error(404)
+        params = urllib.parse.parse_qs(query_string)
+        t = params.get('t', ['0'])[0]
+        try:
+            float(t)
+        except ValueError:
+            return self.send_error(400)
+
+        # キャッシュ
+        cache_dir = os.path.join(NAS_DIR, '.detect_cache', 'frames')
+        os.makedirs(cache_dir, exist_ok=True)
+        safe_name = filename.replace('/', '_').replace('\\', '_')
+        frame_cache = os.path.join(cache_dir, f'{safe_name}.t{t}.jpg')
+        if not os.path.exists(frame_cache):
+            try:
+                result = subprocess.run(
+                    ['ffmpeg', '-ss', t, '-i', video_path,
+                     '-vframes', '1', '-vf', 'scale=320:-1',
+                     '-q:v', '5', '-loglevel', 'quiet', frame_cache],
+                    timeout=15
+                )
+                if result.returncode != 0 or not os.path.exists(frame_cache):
+                    return self.send_error(500)
+            except Exception:
+                return self.send_error(500)
+
+        with open(frame_cache, 'rb') as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', 'image/jpeg')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'max-age=86400')
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_thumbnail(self, filename):
         video_path = os.path.join(NAS_DIR, filename)
@@ -1178,7 +1833,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 'createdAt': meta.get('created_at', 0),
                 'size': os.path.getsize(full_path) if os.path.exists(full_path) else 0
             })
-        clips.sort(key=lambda x: x['createdAt'], reverse=True)
+        def _sort_key(c):
+            v = c['createdAt']
+            if isinstance(v, (int, float)):
+                return v / 1000  # ms → sec
+            try:
+                from datetime import datetime
+                return datetime.fromisoformat(str(v)).timestamp()
+            except Exception:
+                return 0
+        clips.sort(key=_sort_key, reverse=True)
         self.send_json(clips)
 
     def handle_clips_post(self, data):
@@ -1493,7 +2157,14 @@ h1{{font-size:18px;margin-bottom:12px;text-align:center}}video{{max-width:100%;m
             self.end_headers()
             with open(file_path, 'rb') as f:
                 f.seek(start)
-                self.wfile.write(f.read(length))
+                remaining = length
+                chunk = 1 << 20  # 1MB
+                while remaining > 0:
+                    data = f.read(min(chunk, remaining))
+                    if not data:
+                        break
+                    self.wfile.write(data)
+                    remaining -= len(data)
         else:
             self.send_response(200)
             self.send_header('Content-Length', str(file_size))
@@ -1509,6 +2180,73 @@ h1{{font-size:18px;margin-bottom:12px;text-align:center}}video{{max-width:100%;m
             return self.send_error(404)
         mime_type = 'video/mp2t' if filename.endswith('.ts') else 'video/mp4'
         self._serve_file(file_path, mime_type)
+
+    def handle_live_stream_url(self, filename):
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return self.send_error(400)
+        json_path = os.path.join(NAS_DIR, os.path.splitext(filename)[0] + '.json')
+        if not os.path.exists(json_path):
+            return self.send_json({'is_live': False})
+        try:
+            with open(json_path) as f:
+                meta = json.load(f)
+        except Exception:
+            return self.send_json({'is_live': False})
+        live_id = meta.get('live_id', '')
+        if not live_id:
+            return self.send_json({'is_live': False})
+        api_url = f'https://www.mirrativ.com/api/live/get_streaming_url?live_id={live_id}'
+        try:
+            import urllib.request as _ureq
+            req = _ureq.Request(api_url, headers={'User-Agent': _MIRRATIV_UA})
+            with _ureq.urlopen(req, timeout=10) as r:
+                stream_data = json.loads(r.read())
+        except Exception as e:
+            return self.send_json({'is_live': False, 'error': str(e)})
+        if not stream_data.get('is_live'):
+            return self.send_json({'is_live': False})
+        hls_url = stream_data.get('streaming_url_hls', '')
+        if not hls_url:
+            return self.send_json({'is_live': False})
+        proxy_url = '/api/hls-proxy?url=' + urllib.parse.quote(hls_url, safe='')
+        self.send_json({'is_live': True, 'proxy_url': proxy_url})
+
+    def handle_hls_proxy(self, query_string):
+        params = urllib.parse.parse_qs(query_string)
+        url = params.get('url', [''])[0]
+        if not url:
+            return self.send_error(400)
+        if not _is_allowed_proxy_url(url):
+            return self.send_error(403)
+        try:
+            import urllib.request as _ureq
+            req = _ureq.Request(url, headers={'User-Agent': _MIRRATIV_UA})
+            with _ureq.urlopen(req, timeout=20) as r:
+                content_type = r.headers.get('Content-Type', 'application/octet-stream')
+                content = r.read()
+        except Exception:
+            return self.send_error(502)
+        url_path = url.split('?')[0]
+        if 'mpegurl' in content_type.lower() or url_path.endswith('.m3u8'):
+            base_url = url_path.rsplit('/', 1)[0] + '/'
+            lines = content.decode('utf-8', errors='replace').split('\n')
+            out = []
+            for line in lines:
+                stripped = line.rstrip('\r')
+                if stripped and not stripped.startswith('#'):
+                    abs_url = stripped if stripped.startswith('http') else base_url + stripped
+                    out.append('/api/hls-proxy?url=' + urllib.parse.quote(abs_url, safe=''))
+                else:
+                    out.append(stripped)
+            content = '\n'.join(out).encode('utf-8')
+            content_type = 'application/vnd.apple.mpegurl'
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(content)))
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        self.wfile.write(content)
 
 # --- WebSocket ---
 WS_PORT = 3002
@@ -1570,9 +2308,6 @@ def start_ws_server():
 
 # Initialize recordings on start
 def init_recordings():
-    if not MANAGER_SCRIPT:
-        print("Docker mode: recorder container manages recordings, skipping init.")
-        return
     print("Initializing recordings...")
     subprocess.run(f'bash "{MANAGER_SCRIPT}" start', shell=True)
 
@@ -1583,6 +2318,7 @@ if __name__ == '__main__':
     threading.Thread(target=generate_missing_thumbnails, daemon=True).start()
     threading.Thread(target=comment_collector_loop, daemon=True).start()
     threading.Thread(target=prefetch_durations, daemon=True).start()
+    threading.Thread(target=api_log_file_watcher, daemon=True).start()
     if HAS_WEBSOCKETS:
         threading.Thread(target=start_ws_server, daemon=True).start()
         threading.Thread(target=ws_live_monitor, daemon=True).start()

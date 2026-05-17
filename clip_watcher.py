@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Watch MySQL comments for clip command (e.g. "!切り抜き") from a configured user's stream.
-When found, create a clip from the current recording and notify Discord.
+Watch MySQL comments for "!切り抜き" command from めんたこ's stream.
+When found, create a 60-second clip from the current recording and notify Discord.
 """
 
 import pymysql
@@ -22,17 +22,17 @@ MYSQL_PASS  = os.environ.get("MYSQL_PASSWORD", "")
 MYSQL_DB    = os.environ.get("MYSQL_DATABASE", "Mirrativ")
 MYSQL_TABLE = "comments"
 
-MENTAKO_USER_ID     = os.environ.get("MENTAKO_USER_ID",     "")
+MENTAKO_USER_ID    = os.environ.get("MENTAKO_USER_ID",    "126246308")
 CLIP_COMMAND_PREFIX = os.environ.get("CLIP_COMMAND_PREFIX", "!切り抜き")
 CLIP_DURATION_DEFAULT = 60  # seconds
 CLIP_DURATION_MIN = 10
 CLIP_DURATION_MAX = 300
 
 DISCORD_WEBHOOK    = os.environ.get("DISCORD_WEBHOOK", "")
-DISCORD_MAX_FILE_MB = 25
+DISCORD_MAX_FILE_MB = 10
 
 WEB_SERVER_URL = os.environ.get("WEB_SERVER_URL", "http://localhost:3001")
-PUBLIC_URL     = os.environ.get("PUBLIC_URL",     "")
+PUBLIC_URL     = os.environ.get("PUBLIC_URL",     "https://mirrativ-record.saipi1129.com")
 
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 NAS_DIR    = os.environ.get("NAS_DIR", os.path.join(BASE_DIR, "data"))
@@ -118,26 +118,41 @@ def send_discord(message, file_path=None):
 
 
 def find_current_recording():
-    """Find the active .ts recording file for the configured MENTAKO_USER_ID."""
+    """Find the active .ts recording file for めんたこ (126246308)."""
+    import re
     try:
         files = [f for f in os.listdir(NAS_DIR) if f.endswith(".ts")]
     except:
         return None
 
+    # Sort so _segN files come after the base, then we pick the most recently modified
+    files.sort()
+    candidates = []
     for f in files:
-        json_path = os.path.join(NAS_DIR, os.path.splitext(f)[0] + ".json")
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, "r") as jf:
-                    meta = json.load(jf)
-                if meta.get("user_id") == MENTAKO_USER_ID:
-                    ts_path = os.path.join(NAS_DIR, f)
-                    # Check file is actively being written (modified in last 60s)
-                    if time.time() - os.path.getmtime(ts_path) < 60:
-                        return ts_path, meta
-            except:
-                continue
-    return None
+        base = os.path.splitext(f)[0]
+        json_path = os.path.join(NAS_DIR, base + ".json")
+        # _segN.ts: also try the base name without the _segN suffix
+        if not os.path.exists(json_path):
+            base_no_seg = re.sub(r'_seg\d+$', '', base)
+            json_path = os.path.join(NAS_DIR, base_no_seg + ".json")
+        if not os.path.exists(json_path):
+            continue
+        try:
+            with open(json_path, "r") as jf:
+                meta = json.load(jf)
+            if meta.get("user_id") == MENTAKO_USER_ID:
+                ts_path = os.path.join(NAS_DIR, f)
+                mtime = os.path.getmtime(ts_path)
+                # Check file is actively being written (modified in last 60s)
+                if time.time() - mtime < 60:
+                    candidates.append((mtime, ts_path, meta))
+        except:
+            continue
+    if not candidates:
+        return None
+    # Return the most recently written segment
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1], candidates[0][2]
 
 
 def get_ts_duration(filepath):
@@ -194,6 +209,31 @@ def create_clip(ts_path, meta, clip_seconds=None, clip_title=None):
         log("ffmpeg timed out")
         return None
 
+    # Re-encode if clip exceeds Discord limit
+    size_mb = os.path.getsize(clip_path) / (1024 * 1024)
+    if size_mb > DISCORD_MAX_FILE_MB:
+        target_kbps = int(DISCORD_MAX_FILE_MB * 8 * 1024 / clip_dur * 0.95)
+        video_kbps = max(300, target_kbps - 128)
+        log(f"Clip {size_mb:.1f}MB > {DISCORD_MAX_FILE_MB}MB, re-encoding at {video_kbps}kbps")
+        reenc_path = clip_path + ".reenc.mp4"
+        reenc_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", clip_path,
+            "-c:v", "libx264", "-b:v", f"{video_kbps}k", "-maxrate", f"{video_kbps}k",
+            "-bufsize", f"{video_kbps * 2}k", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            reenc_path,
+        ]
+        try:
+            r2 = subprocess.run(reenc_cmd, capture_output=True, text=True, timeout=180)
+            if r2.returncode == 0 and os.path.exists(reenc_path):
+                os.replace(reenc_path, clip_path)
+            else:
+                log(f"Re-encode failed: {r2.stderr}")
+        except subprocess.TimeoutExpired:
+            log("Re-encode timed out")
+
     # Save clip metadata
     clip_meta = {
         "source": os.path.basename(ts_path),
@@ -212,6 +252,18 @@ def create_clip(ts_path, meta, clip_seconds=None, clip_title=None):
 
     size_mb = os.path.getsize(clip_path) / (1024 * 1024)
     log(f"Clip created: {clip_name} ({size_mb:.1f}MB)")
+
+
+    # Web UI に通知
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request('http://localhost:3001/api/internal/clip-created',
+                                   data=b'{}', method='POST'),
+            timeout=2
+        )
+    except Exception:
+        pass
+
     return clip_name, size_mb, clip_dur
 
 
@@ -277,11 +329,11 @@ def main():
                         clip_title = rest.strip() or None
                 log(f"Clip command detected! by {commenter} at {comment_time} ({clip_seconds}s, title={clip_title!r})")
 
-                # Find current recording for the target user
+                # Find current recording for めんたこ
                 result = find_current_recording()
                 if not result:
-                    log(f"No active recording found for user {MENTAKO_USER_ID}")
-                    send_discord(f"⚠️ `{commenter}` が `{CLIP_COMMAND_PREFIX}` しましたが、録画が見つかりません")
+                    log("No active recording found for めんたこ")
+                    send_discord(f"⚠️ `{commenter}` が `!切り抜き` しましたが、めんたこの録画が見つかりません")
                     continue
 
                 ts_path, meta = result
@@ -299,6 +351,33 @@ def main():
                     send_discord(msg, file_path=clip_path)
                 else:
                     send_discord(f"❌ 切り抜き作成に失敗しました (コマンド: {commenter})")
+
+            # 「ガチっす」警報
+            try:
+                conn2 = pymysql.connect(
+                    host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASS,
+                    database=MYSQL_DB, connect_timeout=5, read_timeout=5,
+                )
+                cur2 = conn2.cursor()
+                cur2.execute(
+                    f"SELECT time, name, comment FROM {MYSQL_TABLE} "
+                    f"WHERE time > %s AND (comment LIKE %s OR comment LIKE %s) "
+                    f"ORDER BY time ASC",
+                    (last_check_time, '%ガチっす%', '%がちっす%'),
+                )
+                gachi_rows = cur2.fetchall()
+                conn2.close()
+                for grow in gachi_rows:
+                    gtime, commenter, comment = grow
+                    log(f"ガチっす検知: {commenter} -> {comment}")
+                    send_discord(f"🚨🌪️益子警報🌪️🚨\n`{commenter}`: {comment}")
+                if gachi_rows:
+                    new_t = max(row[0] for row in gachi_rows)
+                    if new_t > last_check_time:
+                        last_check_time = new_t
+                        save_last_check_time(last_check_time)
+            except Exception as e:
+                log(f"ガチっす check error: {e}")
 
             if not rows and (datetime.now() - last_check_time).total_seconds() > 60:
                 last_check_time = datetime.now() - timedelta(seconds=2)

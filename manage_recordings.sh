@@ -4,10 +4,10 @@
 # This script manages recording processes for multiple users
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RECORDER_SCRIPT="${RECORDER_SCRIPT:-$SCRIPT_DIR/recorder_single.sh}"
-TARGETS_FILE="${TARGETS_FILE:-$SCRIPT_DIR/targets.json}"
-PID_DIR="${PID_DIR:-$SCRIPT_DIR/pids}"
-LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/manager.log}"
+RECORDER_SCRIPT="$SCRIPT_DIR/recorder_single.sh"
+TARGETS_FILE="$SCRIPT_DIR/python_gui/targets.json"
+PID_DIR="$SCRIPT_DIR/pids"
+LOG_FILE="$SCRIPT_DIR/manager.log"
 
 mkdir -p "$PID_DIR"
 
@@ -242,32 +242,8 @@ case "$1" in
     cleanup)
         cleanup
         ;;
-    start-loop)
-        # Docker mode: start all recordings and keep container alive
-        log "Starting in loop mode (Docker)..."
-        start_all
-        while true; do
-            sleep 60
-            # Restart dead processes
-            load_targets | while read -r user_id _ci _rd; do
-                if [ -n "$user_id" ]; then
-                    pid_file="$PID_DIR/$user_id.pid"
-                    if [ -f "$pid_file" ]; then
-                        pid=$(cat "$pid_file")
-                        if ! kill -0 "$pid" 2>/dev/null; then
-                            log "Process for $user_id died, restarting..."
-                            rm -f "$pid_file"
-                            start_user_recording "$user_id"
-                        fi
-                    else
-                        start_user_recording "$user_id"
-                    fi
-                fi
-            done
-        done
-        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|cleanup|start-loop} [user_id]"
+        echo "Usage: $0 {start|stop|restart|status|cleanup} [user_id]"
         echo ""
         echo "Commands:"
         echo "  start [user_id]  - Start recording for specific user or all users"
@@ -275,7 +251,6 @@ case "$1" in
         echo "  restart [user_id]- Restart recording for specific user or all users"
         echo "  status           - Show status of all recordings"
         echo "  cleanup          - Remove stale PID files"
-        echo "  start-loop       - Start all + keep running (Docker use)"
         echo ""
         echo "Examples:"
         echo "  $0 start                    # Start all user recordings"
