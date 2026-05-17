@@ -4,10 +4,10 @@
 # This script manages recording processes for multiple users
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RECORDER_SCRIPT="$SCRIPT_DIR/recorder_single.sh"
-TARGETS_FILE="$SCRIPT_DIR/python_gui/targets.json"
-PID_DIR="$SCRIPT_DIR/pids"
-LOG_FILE="$SCRIPT_DIR/manager.log"
+RECORDER_SCRIPT="${RECORDER_SCRIPT:-$SCRIPT_DIR/recorder_single.sh}"
+TARGETS_FILE="${TARGETS_FILE:-$SCRIPT_DIR/config/targets.json}"
+PID_DIR="${PID_DIR:-$SCRIPT_DIR/pids}"
+LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/manager.log}"
 
 mkdir -p "$PID_DIR"
 
