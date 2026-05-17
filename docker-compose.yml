@@ -78,8 +78,8 @@ services:
       DISCORD_WEBHOOK: ${DISCORD_WEBHOOK_CLIP:-}
       PUBLIC_URL: ${PUBLIC_URL}
       CLIP_USER_ID: ${CLIP_USER_ID:-}
-      ALERT_KEYWORDS: ${ALERT_KEYWORDS:-ガチっす,がちっす}
-      ALERT_MESSAGE: ${ALERT_MESSAGE:-🚨🌪️益子警報🌪️🚨}
+      ALERT_KEYWORDS: ${ALERT_KEYWORDS:-}
+      ALERT_MESSAGE: ${ALERT_MESSAGE:-🚨警報🚨}
       WEB_SERVER_URL: http://web:3001
       NAS_DIR: /app/data
     volumes:
