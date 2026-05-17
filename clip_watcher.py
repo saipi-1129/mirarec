@@ -22,7 +22,7 @@ MYSQL_PASS  = os.environ.get("MYSQL_PASSWORD", "")
 MYSQL_DB    = os.environ.get("MYSQL_DATABASE", "Mirrativ")
 MYSQL_TABLE = "comments"
 
-MENTAKO_USER_ID    = os.environ.get("MENTAKO_USER_ID",    "126246308")
+CLIP_USER_ID    = os.environ.get("CLIP_USER_ID",    "126246308")
 CLIP_COMMAND_PREFIX = os.environ.get("CLIP_COMMAND_PREFIX", "!切り抜き")
 CLIP_DURATION_DEFAULT = 60  # seconds
 CLIP_DURATION_MIN = 10
@@ -140,7 +140,7 @@ def find_current_recording():
         try:
             with open(json_path, "r") as jf:
                 meta = json.load(jf)
-            if meta.get("user_id") == MENTAKO_USER_ID:
+            if meta.get("user_id") == CLIP_USER_ID:
                 ts_path = os.path.join(NAS_DIR, f)
                 mtime = os.path.getmtime(ts_path)
                 # Check file is actively being written (modified in last 60s)

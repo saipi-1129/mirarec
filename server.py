@@ -421,7 +421,7 @@ def run_transcription(filepath, filename):
 livecomments_cache = {}
 livecomments_lock = threading.Lock()
 
-MENTAKO_USER_ID = os.environ.get('MENTAKO_USER_ID', '')
+CLIP_USER_ID = os.environ.get('CLIP_USER_ID', '')
 
 def fetch_live_comments_db(start_time_ms, duration_s):
     """Fetch comments from MySQL (めんたこ専用)."""
@@ -604,7 +604,7 @@ def comment_collector_loop():
                 user_id = meta.get('user_id', '')
                 if not live_id or not user_id:
                     continue
-                if user_id == MENTAKO_USER_ID:
+                if user_id == CLIP_USER_ID:
                     continue  # めんたこはMySQLに別途保存済み
                 current.add(live_id)
                 now = time.time()
@@ -1448,7 +1448,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 for item in _file_search_transcripts(q):
                     filename = item['filename']
                     meta = by_filename.get(filename)
-                    if is_guest and (not meta or meta.get('user_id') != MENTAKO_USER_ID):
+                    if is_guest and (not meta or meta.get('user_id') != CLIP_USER_ID):
                         continue
                     for seg in item['segments']:
                         t = seg.get('start', 0)
@@ -1504,7 +1504,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     cur.execute('SELECT filename, segments FROM transcripts WHERE segments LIKE %s LIMIT 500', (like_q,))
                     for filename, segs_json in cur.fetchall():
                         meta = by_filename.get(filename)
-                        if is_guest and (not meta or meta['user_id'] != MENTAKO_USER_ID):
+                        if is_guest and (not meta or meta['user_id'] != CLIP_USER_ID):
                             continue
                         try:
                             segs_data = json.loads(segs_json) if isinstance(segs_json, str) else segs_json
@@ -1538,14 +1538,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         ts_ms = comment_dt.timestamp() * 1000
                         meta = None
                         for m in reversed(sorted_by_start):
-                            if m['user_id'] == MENTAKO_USER_ID and m['start_time'] <= ts_ms:
+                            if m['user_id'] == CLIP_USER_ID and m['start_time'] <= ts_ms:
                                 meta = m
                                 break
                         rel = round((ts_ms - meta['start_time']) / 1000, 1) if meta else None
                         results.append({
                             'type': 'comment',
                             'filename': meta['filename'] if meta else None,
-                            'user_id': MENTAKO_USER_ID,
+                            'user_id': CLIP_USER_ID,
                             'user_name': uname,
                             'title': meta['title'] if meta else '',
                             'time': rel,
@@ -1680,7 +1680,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         duration_s = get_duration(os.path.join(NAS_DIR, filename)) or 7200
         user_id = meta.get('user_id', '')
         live_id = meta.get('live_id', '')
-        if user_id == MENTAKO_USER_ID:
+        if user_id == CLIP_USER_ID:
             comments, highlights = fetch_live_comments_db(start_time_ms, duration_s)
         else:
             comments, highlights = fetch_live_comments_collected(live_id, user_id, start_time_ms)

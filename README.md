@@ -72,7 +72,7 @@ Web UI → 「Targets」タブ → 「+ Add Target」でMirrativユーザーID�
 
 ## クリップコマンド
 
-配信中にMirrativコメントで以下のコマンドを送ると、自動でクリップが作成されDiscordに投稿されます（セットアップで設定した `MENTAKO_USER_ID` のコメントのみ有効）：
+配信中にMirrativコメントで以下のコマンドを送ると、自動でクリップが作成されDiscordに投稿されます（セットアップで設定した `CLIP_USER_ID` のコメントのみ有効）：
 
 ```
 !切り抜き              # 直近60秒をクリップ
