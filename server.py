@@ -26,23 +26,57 @@ except ImportError:
 
 PORT = int(os.environ.get('PORT', 3001))
 
-# MySQL config (env vars override hardcoded defaults)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+
+# --- Saved config (written by setup wizard, lower priority than env vars) ---
+CONFIG_DIR = os.environ.get('CONFIG_DIR', os.path.join(BASE_DIR, 'config'))
+SETUP_CONFIG_FILE = os.path.join(CONFIG_DIR, 'server_config.json')
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+_saved_config = {}
+if os.path.exists(SETUP_CONFIG_FILE):
+    try:
+        with open(SETUP_CONFIG_FILE) as f:
+            _saved_config = json.load(f)
+    except Exception:
+        pass
+
+def _cfg(env_key, config_key, default=''):
+    """env var > saved config > default"""
+    v = os.environ.get(env_key)
+    if v is not None:
+        return v
+    return _saved_config.get(config_key, default)
+
+def is_setup_complete():
+    return bool(_saved_config.get('setup_complete')) or bool(os.environ.get('ADMIN_PASS'))
+
+# MySQL: env varがあれば有効、なければ saved_config の use_mysql に従う
+if os.environ.get('MYSQL_HOST'):
+    MYSQL_DISABLED = False
+elif _saved_config:
+    MYSQL_DISABLED = not bool(_saved_config.get('use_mysql'))
+else:
+    MYSQL_DISABLED = True  # セットアップ未完了時は無効
+
 MYSQL_CONFIG = {
-    'host':     os.environ.get('MYSQL_HOST',     'localhost'),
-    'user':     os.environ.get('MYSQL_USER',     'clip'),
-    'password': os.environ.get('MYSQL_PASSWORD', ''),
-    'database': os.environ.get('MYSQL_DATABASE', 'Mirrativ'),
+    'host':     _cfg('MYSQL_HOST',     'mysql_host',     'localhost'),
+    'user':     _cfg('MYSQL_USER',     'mysql_user',     'clip'),
+    'password': _cfg('MYSQL_PASSWORD', 'mysql_password', ''),
+    'database': _cfg('MYSQL_DATABASE', 'mysql_database', 'Mirrativ'),
     'connect_timeout': 5,
     'read_timeout': 5,
     'charset': 'utf8mb4',
 }
 
 def get_db():
+    if MYSQL_DISABLED:
+        raise RuntimeError('MySQL is disabled')
     return pymysql.connect(**MYSQL_CONFIG)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, 'static')
+
 NAS_DIR = os.environ.get('NAS_DIR', os.path.join(BASE_DIR, '../data'))
-TARGETS_FILE = os.environ.get('TARGETS_FILE', os.path.join(BASE_DIR, 'targets.json'))
+TARGETS_FILE = os.environ.get('TARGETS_FILE', os.path.join(CONFIG_DIR, 'targets.json'))
 PID_DIR = os.environ.get('PID_DIR', os.path.join(BASE_DIR, '../pids'))
 MANAGER_SCRIPT = os.environ.get('MANAGER_SCRIPT', os.path.join(BASE_DIR, '../manage_recordings.sh'))
 THUMBNAILS_DIR = os.path.join(NAS_DIR, 'images')
@@ -97,10 +131,13 @@ def api_log_file_watcher():
         time.sleep(3)
 
 # Authentication
-ADMIN_USERNAME = os.environ.get('ADMIN_USER', 'admin')
-_admin_pass = os.environ.get('ADMIN_PASS', '')
-ADMIN_PASSWORD_HASH = hashlib.sha256(_admin_pass.encode()).hexdigest()
-_guest_ids_raw = os.environ.get('GUEST_USER_IDS', '')
+ADMIN_USERNAME = _cfg('ADMIN_USER', 'admin_user', 'admin')
+_admin_pass = _cfg('ADMIN_PASS', 'admin_pass', '')
+ADMIN_PASSWORD_HASH = (
+    _saved_config.get('admin_pass_hash') if not os.environ.get('ADMIN_PASS') and _saved_config.get('admin_pass_hash')
+    else hashlib.sha256(_admin_pass.encode()).hexdigest()
+)
+_guest_ids_raw = _cfg('GUEST_USER_IDS', 'guest_user_ids', '')
 GUEST_VISIBLE_USER_IDS = set(x for x in _guest_ids_raw.split(',') if x)
 sessions = {}  # token -> {"role": "admin" | "guest"}
 sessions_lock = threading.Lock()
@@ -113,7 +150,8 @@ transcription_slots = threading.Semaphore(TRANSCRIPTION_MAX_CONCURRENCY)
 TRANSCRIPTS_DIR = os.path.join(NAS_DIR, 'transcripts')
 os.makedirs(TRANSCRIPTS_DIR, exist_ok=True)
 
-DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK_RECORDER', '')
+DISCORD_WEBHOOK = _cfg('DISCORD_WEBHOOK_RECORDER', 'discord_webhook_recorder', '')
+PUBLIC_URL = _cfg('PUBLIC_URL', 'public_url', '')
 
 def send_discord(message):
     try:
@@ -754,6 +792,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
+        # セットアップ未完了なら /setup にリダイレクト
+        if not is_setup_complete():
+            if path == '/setup':
+                self._serve_setup()
+                return
+            if path.startswith('/api/setup'):
+                self.handle_setup_status()
+                return
+            if path.startswith('/api/') or path in ('/', '/index.html'):
+                self.send_response(302)
+                self.send_header('Location', '/setup')
+                self.end_headers()
+                return
+            super().do_GET()
+            return
+
         if path == '/api/auth/status':
             self.handle_auth_status()
         elif path == '/api/search':
@@ -866,6 +920,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except:
             data = {}
 
+        if path == '/api/setup/complete':
+            self.handle_setup_complete(data)
+            return
+        elif path == '/api/setup/test-db':
+            self.handle_setup_test_db(data)
+            return
+
         if path == '/api/auth/login':
             self.handle_auth_login(data)
         elif path == '/api/auth/logout':
@@ -944,6 +1005,95 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not user_id or not re.match(r'^[a-zA-Z0-9_]+$', user_id):
             return False
         return True
+
+    # --- Setup wizard ---
+    def _serve_setup(self):
+        setup_path = os.path.join(STATIC_DIR, 'setup.html')
+        if not os.path.exists(setup_path):
+            self.send_error(404)
+            return
+        with open(setup_path, 'rb') as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_setup_status(self):
+        self.send_json({'setup_complete': is_setup_complete(), 'mysql_disabled': MYSQL_DISABLED})
+
+    def handle_setup_test_db(self, data):
+        try:
+            conn = pymysql.connect(
+                host=data.get('host', 'localhost'),
+                user=data.get('user', 'clip'),
+                password=data.get('password', ''),
+                database=data.get('database', 'Mirrativ'),
+                connect_timeout=5,
+                charset='utf8mb4',
+            )
+            conn.close()
+            self.send_json({'ok': True})
+        except Exception as e:
+            self.send_json({'ok': False, 'error': str(e)})
+
+    def handle_setup_complete(self, data):
+        global MYSQL_DISABLED, MYSQL_CONFIG, ADMIN_USERNAME, ADMIN_PASSWORD_HASH
+        global GUEST_VISIBLE_USER_IDS, DISCORD_WEBHOOK, PUBLIC_URL, _saved_config
+
+        use_mysql = data.get('use_mysql', False)
+        admin_user = data.get('admin_user', 'admin').strip()
+        admin_pass = data.get('admin_pass', '').strip()
+        if not admin_user or not admin_pass:
+            self.send_json({'ok': False, 'error': 'ユーザー名とパスワードは必須です'})
+            return
+
+        config = {
+            'setup_complete': True,
+            'use_mysql': use_mysql,
+            'admin_user': admin_user,
+            'admin_pass_hash': hashlib.sha256(admin_pass.encode()).hexdigest(),
+            'guest_user_ids': data.get('guest_user_ids', ''),
+            'discord_webhook_recorder': data.get('discord_webhook_recorder', ''),
+            'discord_webhook_clip': data.get('discord_webhook_clip', ''),
+            'public_url': data.get('public_url', ''),
+        }
+        if use_mysql:
+            config.update({
+                'mysql_host': data.get('mysql_host', 'localhost'),
+                'mysql_user': data.get('mysql_user', 'clip'),
+                'mysql_password': data.get('mysql_password', ''),
+                'mysql_database': data.get('mysql_database', 'Mirrativ'),
+            })
+
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(SETUP_CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.send_json({'ok': False, 'error': f'設定の保存に失敗しました: {e}'})
+            return
+
+        # Apply config to running process
+        _saved_config = config
+        MYSQL_DISABLED = not use_mysql
+        if use_mysql:
+            MYSQL_CONFIG.update({
+                'host': config.get('mysql_host', 'localhost'),
+                'user': config.get('mysql_user', 'clip'),
+                'password': config.get('mysql_password', ''),
+                'database': config.get('mysql_database', 'Mirrativ'),
+            })
+        ADMIN_USERNAME = admin_user
+        ADMIN_PASSWORD_HASH = config['admin_pass_hash']
+        _g = config.get('guest_user_ids', '')
+        GUEST_VISIBLE_USER_IDS = set(x for x in _g.split(',') if x)
+        DISCORD_WEBHOOK = config.get('discord_webhook_recorder', '')
+        PUBLIC_URL = config.get('public_url', '')
+
+        self.send_json({'ok': True})
 
     def handle_auth_login(self, data):
         username = data.get('username', '')

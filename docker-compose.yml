@@ -37,6 +37,7 @@ services:
       GUEST_USER_IDS: ${GUEST_USER_IDS:-}
       DISCORD_WEBHOOK_RECORDER: ${DISCORD_WEBHOOK_RECORDER:-}
       NAS_DIR: /app/data
+      CONFIG_DIR: /app/config
       TARGETS_FILE: /app/config/targets.json
       # MANAGER_SCRIPT is not used in Docker mode (recorder container handles this)
       MANAGER_SCRIPT: ""

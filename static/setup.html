@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiraRec — セットアップ</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;}
+        :root{
+            --bg:#07090d;--surface:#0f141c;--surface2:#151c27;
+            --border:#1f2a3a;--border-b:#2a3a52;
+            --text:#e6edf5;--text2:#6b7a92;--text3:#425066;
+            --accent:#4ff1e3;--accent-dim:#2ca89e;--accent-glow:rgba(79,241,227,.3);
+            --red:#ff3b5c;--green:#3dd68c;--amber:#ffb547;
+            --mono:'JetBrains Mono',monospace;--sans:'Space Grotesk',sans-serif;
+        }
+        body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;}
+        body::before{content:"";position:fixed;inset:0;pointer-events:none;
+            background:radial-gradient(700px 500px at 20% 70%,rgba(79,241,227,.06),transparent 70%),
+                       radial-gradient(600px 400px at 80% 10%,rgba(255,181,71,.04),transparent 70%);}
+
+        .wizard{width:100%;max-width:520px;position:relative;z-index:1;}
+
+        /* Header */
+        .wiz-header{display:flex;align-items:center;gap:14px;margin-bottom:32px;}
+        .wiz-header img{width:48px;height:48px;border-radius:14px;box-shadow:0 4px 20px var(--accent-glow);}
+        .wiz-header-text h1{font-size:20px;font-weight:700;letter-spacing:-.02em;}
+        .wiz-header-text p{font:500 11px/1 var(--mono);color:var(--accent-dim);letter-spacing:.12em;text-transform:uppercase;margin-top:3px;}
+
+        /* Steps indicator */
+        .steps{display:flex;gap:8px;margin-bottom:28px;}
+        .step-dot{flex:1;height:3px;border-radius:2px;background:var(--border);transition:background .3s;}
+        .step-dot.active{background:var(--accent);}
+        .step-dot.done{background:var(--accent-dim);}
+
+        /* Card */
+        .card{background:rgba(15,20,28,.9);border:1px solid var(--border-b);border-radius:16px;padding:32px;box-shadow:0 24px 60px rgba(0,0,0,.6),0 0 0 1px rgba(79,241,227,.05);}
+        .card-title{font-size:18px;font-weight:700;margin-bottom:6px;}
+        .card-sub{font-size:13px;color:var(--text2);margin-bottom:24px;line-height:1.5;}
+
+        /* Form */
+        label{display:block;font:600 12px/1 var(--mono);color:var(--text2);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;margin-top:16px;}
+        label:first-of-type{margin-top:0;}
+        input[type=text],input[type=password],input[type=url],select{
+            width:100%;padding:11px 14px;border-radius:8px;border:1px solid var(--border);
+            background:rgba(7,9,13,.5);color:var(--text);font:14px/1 var(--sans);
+            outline:none;transition:border-color .15s,box-shadow .15s;
+        }
+        input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(79,241,227,.14);}
+        input::placeholder{color:var(--text3);}
+        select option{background:var(--surface2);}
+
+        /* Radio cards */
+        .radio-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px;}
+        .radio-card{position:relative;cursor:pointer;}
+        .radio-card input{position:absolute;opacity:0;width:0;height:0;}
+        .radio-card-inner{
+            border:1px solid var(--border);border-radius:10px;padding:16px;
+            transition:border-color .15s,background .15s;
+        }
+        .radio-card input:checked + .radio-card-inner{
+            border-color:var(--accent);background:rgba(79,241,227,.06);
+        }
+        .radio-card-inner .rc-icon{font-size:22px;margin-bottom:8px;}
+        .radio-card-inner .rc-title{font:600 13px/1 var(--sans);margin-bottom:4px;}
+        .radio-card-inner .rc-desc{font:400 11px/1.4 var(--sans);color:var(--text2);}
+
+        /* DB fields */
+        #mysql-fields{margin-top:16px;}
+        .input-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+
+        /* Test connection */
+        #test-db-btn{
+            margin-top:12px;padding:8px 16px;border-radius:7px;border:1px solid var(--border-b);
+            background:transparent;color:var(--text2);font:600 12px var(--mono);cursor:pointer;
+            letter-spacing:.08em;text-transform:uppercase;transition:all .15s;
+        }
+        #test-db-btn:hover{border-color:var(--accent);color:var(--accent);}
+        #test-result{margin-top:8px;font:600 12px var(--mono);display:none;}
+        #test-result.ok{color:var(--green);}
+        #test-result.err{color:var(--red);}
+
+        /* Optional badge */
+        .optional{font:500 10px var(--mono);color:var(--text3);margin-left:8px;text-transform:uppercase;letter-spacing:.08em;}
+
+        /* Buttons */
+        .btn-row{display:flex;gap:10px;margin-top:24px;}
+        .btn-primary{flex:1;padding:13px;border-radius:10px;border:none;background:var(--accent);color:#07090d;font:700 14px var(--sans);cursor:pointer;transition:all .15s;}
+        .btn-primary:hover{background:#6cfff0;}
+        .btn-primary:active{transform:scale(.98);}
+        .btn-back{padding:13px 20px;border-radius:10px;border:1px solid var(--border-b);background:transparent;color:var(--text2);font:600 14px var(--sans);cursor:pointer;transition:all .15s;}
+        .btn-back:hover{background:var(--surface);}
+
+        /* Error */
+        .form-error{color:var(--red);font:600 12px var(--mono);margin-top:10px;display:none;padding:8px 12px;background:rgba(255,59,92,.08);border-radius:6px;border:1px solid rgba(255,59,92,.2);}
+
+        /* Done screen */
+        .done-icon{text-align:center;font-size:48px;margin-bottom:16px;}
+        .done-title{text-align:center;font-size:22px;font-weight:700;margin-bottom:8px;}
+        .done-sub{text-align:center;color:var(--text2);font-size:13px;line-height:1.6;margin-bottom:24px;}
+        .done-info{background:var(--surface2);border-radius:8px;padding:14px 16px;font:12px/1.8 var(--mono);color:var(--text2);margin-bottom:20px;}
+        .done-info strong{color:var(--text);}
+
+        /* Slide transition */
+        .step{display:none;}
+        .step.active{display:block;}
+    </style>
+</head>
+<body>
+<div class="wizard">
+    <div class="wiz-header">
+        <img src="/icon-192.png" alt="MiraRec">
+        <div class="wiz-header-text">
+            <h1>MiraRec</h1>
+            <p>初回セットアップ</p>
+        </div>
+    </div>
+
+    <div class="steps" id="steps-bar">
+        <div class="step-dot active" id="dot-0"></div>
+        <div class="step-dot" id="dot-1"></div>
+        <div class="step-dot" id="dot-2"></div>
+        <div class="step-dot" id="dot-3"></div>
+    </div>
+
+    <div class="card">
+
+        <!-- Step 0: DB -->
+        <div class="step active" id="step-0">
+            <div class="card-title">データベース</div>
+            <div class="card-sub">コメント履歴・文字起こし機能にはMySQLが必要です。<br>録画のみ使う場合は「使用しない」を選べます。</div>
+
+            <div class="radio-grid">
+                <label class="radio-card">
+                    <input type="radio" name="db" value="mysql" checked>
+                    <div class="radio-card-inner">
+                        <div class="rc-icon">🗄️</div>
+                        <div class="rc-title">MySQL を使用</div>
+                        <div class="rc-desc">全機能が使えます</div>
+                    </div>
+                </label>
+                <label class="radio-card">
+                    <input type="radio" name="db" value="none">
+                    <div class="radio-card-inner">
+                        <div class="rc-icon">📁</div>
+                        <div class="rc-title">使用しない</div>
+                        <div class="rc-desc">録画・クリップのみ</div>
+                    </div>
+                </label>
+            </div>
+
+            <div id="mysql-fields">
+                <label>ホスト</label>
+                <input type="text" id="db-host" value="localhost" placeholder="localhost">
+                <div class="input-row">
+                    <div>
+                        <label>ユーザー名</label>
+                        <input type="text" id="db-user" value="clip" placeholder="clip">
+                    </div>
+                    <div>
+                        <label>データベース名</label>
+                        <input type="text" id="db-name" value="Mirrativ" placeholder="Mirrativ">
+                    </div>
+                </div>
+                <label>パスワード</label>
+                <input type="password" id="db-pass" placeholder="パスワード">
+                <button type="button" id="test-db-btn">接続テスト</button>
+                <div id="test-result"></div>
+            </div>
+
+            <div class="form-error" id="err-0"></div>
+            <div class="btn-row">
+                <button class="btn-primary" onclick="nextStep(0)">次へ →</button>
+            </div>
+        </div>
+
+        <!-- Step 1: Admin -->
+        <div class="step" id="step-1">
+            <div class="card-title">管理者アカウント</div>
+            <div class="card-sub">Web UIにログインするための管理者情報を設定します。</div>
+
+            <label>ユーザー名</label>
+            <input type="text" id="admin-user" value="admin" placeholder="admin" autocomplete="username">
+            <label>パスワード</label>
+            <input type="password" id="admin-pass" placeholder="パスワードを入力" autocomplete="new-password">
+            <label>パスワード（確認）</label>
+            <input type="password" id="admin-pass2" placeholder="もう一度入力" autocomplete="new-password">
+
+            <div class="form-error" id="err-1"></div>
+            <div class="btn-row">
+                <button class="btn-back" onclick="prevStep(1)">← 戻る</button>
+                <button class="btn-primary" onclick="nextStep(1)">次へ →</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Discord -->
+        <div class="step" id="step-2">
+            <div class="card-title">Discord 通知 <span class="optional">任意</span></div>
+            <div class="card-sub">録画開始・終了・クリップ作成をDiscordに通知します。<br>後から変更することもできます。</div>
+
+            <label>録画通知 Webhook URL <span class="optional">任意</span></label>
+            <input type="url" id="wh-recorder" placeholder="https://discord.com/api/webhooks/...">
+            <label>クリップ通知 Webhook URL <span class="optional">任意</span></label>
+            <input type="url" id="wh-clip" placeholder="https://discord.com/api/webhooks/...">
+            <label>公開URL <span class="optional">任意</span></label>
+            <input type="url" id="public-url" placeholder="http://localhost:3001（クリップ共有リンクに使用）">
+
+            <div class="form-error" id="err-2"></div>
+            <div class="btn-row">
+                <button class="btn-back" onclick="prevStep(2)">← 戻る</button>
+                <button class="btn-primary" onclick="nextStep(2)">次へ →</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Guest / confirm -->
+        <div class="step" id="step-3">
+            <div class="card-title">ゲストアクセス <span class="optional">任意</span></div>
+            <div class="card-sub">ゲストユーザー（ログインなし）に表示するMirrativユーザーIDを指定します。<br>空欄にするとゲストには何も表示されません。</div>
+
+            <label>ゲストに表示するユーザーID <span class="optional">カンマ区切り</span></label>
+            <input type="text" id="guest-ids" placeholder="123456789,987654321">
+
+            <div class="form-error" id="err-3"></div>
+            <div class="btn-row">
+                <button class="btn-back" onclick="prevStep(3)">← 戻る</button>
+                <button class="btn-primary" id="finish-btn" onclick="finishSetup()">セットアップ完了</button>
+            </div>
+        </div>
+
+        <!-- Step 4: Done -->
+        <div class="step" id="step-done">
+            <div class="done-icon">✅</div>
+            <div class="done-title">セットアップ完了</div>
+            <div class="done-sub">設定が保存されました。<br>Web UIにログインしてください。</div>
+            <div class="done-info" id="done-info"></div>
+            <button class="btn-primary" onclick="location.href='/'">Web UIを開く →</button>
+        </div>
+
+    </div>
+</div>
+
+<script>
+let currentStep = 0;
+const TOTAL_STEPS = 4;
+
+// DB radio toggle
+document.querySelectorAll('input[name=db]').forEach(r => {
+    r.addEventListener('change', () => {
+        document.getElementById('mysql-fields').style.display =
+            r.value === 'mysql' ? '' : 'none';
+    });
+});
+
+// Test connection
+document.getElementById('test-db-btn').onclick = async () => {
+    const btn = document.getElementById('test-db-btn');
+    const res = document.getElementById('test-result');
+    btn.disabled = true;
+    btn.textContent = '接続中...';
+    res.style.display = 'none';
+    try {
+        const r = await fetch('/api/setup/test-db', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                host: document.getElementById('db-host').value.trim(),
+                user: document.getElementById('db-user').value.trim(),
+                password: document.getElementById('db-pass').value,
+                database: document.getElementById('db-name').value.trim(),
+            })
+        });
+        const d = await r.json();
+        res.textContent = d.ok ? '✓ 接続成功' : '✗ ' + d.error;
+        res.className = d.ok ? 'ok' : 'err';
+        res.style.display = 'block';
+    } catch(e) {
+        res.textContent = '✗ 通信エラー';
+        res.className = 'err';
+        res.style.display = 'block';
+    }
+    btn.disabled = false;
+    btn.textContent = '接続テスト';
+};
+
+function showError(step, msg) {
+    const el = document.getElementById('err-' + step);
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+function clearError(step) {
+    const el = document.getElementById('err-' + step);
+    el.style.display = 'none';
+}
+
+function nextStep(from) {
+    clearError(from);
+    if (from === 0) {
+        const useMySQL = document.querySelector('input[name=db]:checked').value === 'mysql';
+        if (useMySQL) {
+            if (!document.getElementById('db-host').value.trim()) return showError(0, 'ホスト名を入力してください');
+            if (!document.getElementById('db-user').value.trim()) return showError(0, 'ユーザー名を入力してください');
+        }
+    }
+    if (from === 1) {
+        const u = document.getElementById('admin-user').value.trim();
+        const p = document.getElementById('admin-pass').value;
+        const p2 = document.getElementById('admin-pass2').value;
+        if (!u) return showError(1, 'ユーザー名を入力してください');
+        if (p.length < 4) return showError(1, 'パスワードは4文字以上で入力してください');
+        if (p !== p2) return showError(1, 'パスワードが一致しません');
+    }
+    goTo(from + 1);
+}
+
+function prevStep(from) {
+    goTo(from - 1);
+}
+
+function goTo(step) {
+    document.getElementById('step-' + currentStep).classList.remove('active');
+    document.getElementById('dot-' + currentStep).classList.remove('active');
+    document.getElementById('dot-' + currentStep).classList.add('done');
+    currentStep = step;
+    const el = document.getElementById('step-' + currentStep);
+    if (el) el.classList.add('active');
+    const dot = document.getElementById('dot-' + currentStep);
+    if (dot) { dot.classList.remove('done'); dot.classList.add('active'); }
+}
+
+async function finishSetup() {
+    clearError(3);
+    const btn = document.getElementById('finish-btn');
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+
+    const useMySQL = document.querySelector('input[name=db]:checked').value === 'mysql';
+    const payload = {
+        use_mysql: useMySQL,
+        mysql_host: document.getElementById('db-host').value.trim(),
+        mysql_user: document.getElementById('db-user').value.trim(),
+        mysql_password: document.getElementById('db-pass').value,
+        mysql_database: document.getElementById('db-name').value.trim(),
+        admin_user: document.getElementById('admin-user').value.trim(),
+        admin_pass: document.getElementById('admin-pass').value,
+        discord_webhook_recorder: document.getElementById('wh-recorder').value.trim(),
+        discord_webhook_clip: document.getElementById('wh-clip').value.trim(),
+        public_url: document.getElementById('public-url').value.trim(),
+        guest_user_ids: document.getElementById('guest-ids').value.trim(),
+    };
+
+    try {
+        const r = await fetch('/api/setup/complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!d.ok) {
+            showError(3, d.error || '保存に失敗しました');
+            btn.disabled = false;
+            btn.textContent = 'セットアップ完了';
+            return;
+        }
+        // Show done screen
+        document.getElementById('step-3').classList.remove('active');
+        document.getElementById('dot-3').classList.remove('active');
+        document.getElementById('dot-3').classList.add('done');
+        document.getElementById('step-done').classList.add('active');
+        document.getElementById('steps-bar').style.display = 'none';
+
+        const info = document.getElementById('done-info');
+        info.innerHTML =
+            `<strong>管理者:</strong> ${payload.admin_user}<br>` +
+            `<strong>データベース:</strong> ${useMySQL ? 'MySQL (' + payload.mysql_host + ')' : '使用しない'}<br>` +
+            `<strong>Discord通知:</strong> ${payload.discord_webhook_recorder ? '設定済み' : '未設定'}`;
+    } catch(e) {
+        showError(3, '通信エラーが発生しました');
+        btn.disabled = false;
+        btn.textContent = 'セットアップ完了';
+    }
+}
+</script>
+</body>
+</html>
