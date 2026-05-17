@@ -149,6 +149,124 @@ TRANSCRIPTION_MAX_CONCURRENCY = max(1, int(os.environ.get('TRANSCRIPTION_MAX_CON
 transcription_slots = threading.Semaphore(TRANSCRIPTION_MAX_CONCURRENCY)
 TRANSCRIPTS_DIR = os.path.join(NAS_DIR, 'transcripts')
 os.makedirs(TRANSCRIPTS_DIR, exist_ok=True)
+CLIP_COMMENTS_DIR = os.path.join(CLIPS_DIR, '.clip_comments')
+LIVE_COMMENTS_DIR = os.path.join(NAS_DIR, '.live_comments')
+os.makedirs(CLIP_COMMENTS_DIR, exist_ok=True)
+os.makedirs(LIVE_COMMENTS_DIR, exist_ok=True)
+
+# --- File-based storage helpers (used when MySQL is disabled) ---
+
+import uuid as _uuid_mod
+
+def _clip_comments_path(clip_filename):
+    safe = re.sub(r'[/\\]', '_', clip_filename)
+    return os.path.join(CLIP_COMMENTS_DIR, safe + '.json')
+
+def _live_comments_path(user_id, live_id):
+    d = os.path.join(LIVE_COMMENTS_DIR, str(user_id))
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, str(live_id) + '.json')
+
+def _file_get_clip_comments(clip_filename):
+    path = _clip_comments_path(clip_filename)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _file_add_clip_comment(clip_filename, author, comment):
+    path = _clip_comments_path(clip_filename)
+    comments = _file_get_clip_comments(clip_filename)
+    now = time.strftime('%Y-%m-%d %H:%M:%S')
+    new = {'id': str(_uuid_mod.uuid4())[:8], 'author': author, 'comment': comment, 'created_at': now}
+    comments.append(new)
+    with open(path, 'w') as f:
+        json.dump(comments, f, ensure_ascii=False)
+    return new
+
+def _file_delete_clip_comment(comment_id):
+    cid = str(comment_id)
+    for fname in os.listdir(CLIP_COMMENTS_DIR):
+        if not fname.endswith('.json'):
+            continue
+        path = os.path.join(CLIP_COMMENTS_DIR, fname)
+        try:
+            with open(path) as f:
+                comments = json.load(f)
+            new_list = [c for c in comments if str(c.get('id')) != cid]
+            if len(new_list) != len(comments):
+                with open(path, 'w') as f:
+                    json.dump(new_list, f, ensure_ascii=False)
+                return True
+        except Exception:
+            pass
+    return False
+
+def _file_store_live_comments(live_id, user_id, comments_raw):
+    """Append new comments to file, deduplicate by (user_name, comment_time)."""
+    path = _live_comments_path(user_id, live_id)
+    existing = []
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = json.load(f)
+        except Exception:
+            pass
+    seen = {(c.get('user_name', ''), c.get('comment_time', 0)) for c in existing}
+    inserted = 0
+    for c in comments_raw:
+        key = (c.get('user_name', ''), int(c.get('created_at', 0)))
+        if key not in seen:
+            seen.add(key)
+            existing.append({'live_id': live_id, 'user_name': c.get('user_name', ''),
+                             'comment': c.get('comment', ''), 'comment_time': int(c.get('created_at', 0))})
+            inserted += 1
+    with open(path, 'w') as f:
+        json.dump(existing, f, ensure_ascii=False)
+    return inserted
+
+def _file_fetch_live_comments(live_id, user_id, start_time_ms):
+    path = _live_comments_path(user_id, live_id)
+    if not os.path.exists(path):
+        return [], []
+    try:
+        with open(path) as f:
+            rows = json.load(f)
+    except Exception:
+        return [], []
+    start_s = start_time_ms / 1000
+    comments = [
+        {'time': round(r['comment_time'] - start_s, 1), 'user': r['user_name'], 'text': r['comment']}
+        for r in rows if r['comment_time'] - start_s >= 0
+    ]
+    comments.sort(key=lambda x: x['time'])
+    return comments, detect_comment_highlights(comments)
+
+def _file_search_transcripts(query):
+    """Search transcript JSON files for a query string."""
+    results = []
+    q_lower = query.lower()
+    try:
+        for fname in os.listdir(TRANSCRIPTS_DIR):
+            if not fname.endswith('.json'):
+                continue
+            path = os.path.join(TRANSCRIPTS_DIR, fname)
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                segs = data.get('segments', [])
+                matched = [s for s in segs if q_lower in s.get('text', '').lower()]
+                if matched:
+                    filename = fname[:-5]  # remove .json
+                    results.append({'filename': filename, 'segments': matched})
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return results
 
 DISCORD_WEBHOOK = _cfg('DISCORD_WEBHOOK_RECORDER', 'discord_webhook_recorder', '')
 PUBLIC_URL = _cfg('PUBLIC_URL', 'public_url', '')
@@ -276,18 +394,18 @@ def run_transcription(filepath, filename):
             segs.append({'start': round(seg.start, 2), 'end': round(seg.end, 2), 'text': seg.text.strip()})
         with open(transcript_path, 'w', encoding='utf-8') as f:
             json.dump({'segments': segs, 'language': info.language}, f, ensure_ascii=False, indent=2)
-        # Save to MySQL
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            segs_json = json.dumps(segs, ensure_ascii=False)
-            cur.execute('INSERT INTO transcripts (filename, segments, language) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE segments=%s, language=%s',
-                        (filename, segs_json, info.language, segs_json, info.language))
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as db_err:
-            print(f"Transcript MySQL save error: {db_err}")
+        if not MYSQL_DISABLED:
+            try:
+                conn = get_db()
+                cur = conn.cursor()
+                segs_json = json.dumps(segs, ensure_ascii=False)
+                cur.execute('INSERT INTO transcripts (filename, segments, language) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE segments=%s, language=%s',
+                            (filename, segs_json, info.language, segs_json, info.language))
+                conn.commit()
+                cur.close()
+                conn.close()
+            except Exception as db_err:
+                print(f"Transcript MySQL save error: {db_err}")
         with transcription_lock:
             transcription_jobs[filename] = {'status': 'done', 'segments': segs}
         print(f"Transcription done: {filename} ({len(segs)} segments)")
@@ -332,7 +450,9 @@ def fetch_live_comments_db(start_time_ms, duration_s):
     return comments, detect_comment_highlights(comments)
 
 def fetch_live_comments_collected(live_id, user_id, start_time_ms):
-    """Fetch comments from collected live_comments_{user_id} table."""
+    """Fetch comments from collected live_comments_{user_id} table (or file)."""
+    if MYSQL_DISABLED:
+        return _file_fetch_live_comments(live_id, user_id, start_time_ms)
     table = _comment_table(user_id)
     start_s = start_time_ms / 1000
     try:
@@ -432,22 +552,25 @@ def _fetch_and_store_comments(live_id, user_id):
         _log_api('collector', url, status, (time.time() - t0) * 1000, user_id)
         if not comments:
             return 0
-        db = get_db()
-        _ensure_comment_table(db, user_id)
-        table = _comment_table(user_id)
-        cur = db.cursor()
-        inserted = 0
-        for c in comments:
-            try:
-                cur.execute(
-                    f'INSERT IGNORE INTO `{table}` (live_id, user_name, comment, comment_time) VALUES (%s, %s, %s, %s)',
-                    (live_id, c.get('user_name', ''), c.get('comment', ''), int(c.get('created_at', 0)))
-                )
-                inserted += cur.rowcount
-            except Exception:
-                pass
-        db.commit()
-        db.close()
+        if MYSQL_DISABLED:
+            inserted = _file_store_live_comments(live_id, user_id, comments)
+        else:
+            db = get_db()
+            _ensure_comment_table(db, user_id)
+            table = _comment_table(user_id)
+            cur = db.cursor()
+            inserted = 0
+            for c in comments:
+                try:
+                    cur.execute(
+                        f'INSERT IGNORE INTO `{table}` (live_id, user_name, comment, comment_time) VALUES (%s, %s, %s, %s)',
+                        (live_id, c.get('user_name', ''), c.get('comment', ''), int(c.get('created_at', 0)))
+                    )
+                    inserted += cur.rowcount
+                except Exception:
+                    pass
+            db.commit()
+            db.close()
         print(f"[COMMENT_COLLECTOR] {live_id} ({user_id}): +{inserted}/{len(comments)}")
         return inserted
     except Exception as e:
@@ -1319,95 +1442,143 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         like_q = f'%{q}%'
         results = []
 
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-
-            # --- 字幕検索 ---
+        if MYSQL_DISABLED:
+            # --- ファイルベース検索 ---
             if search_type in ('all', 'transcript'):
-                cur.execute('SELECT filename, segments FROM transcripts WHERE segments LIKE %s LIMIT 500', (like_q,))
-                for filename, segs_json in cur.fetchall():
+                for item in _file_search_transcripts(q):
+                    filename = item['filename']
                     meta = by_filename.get(filename)
-                    if is_guest and (not meta or meta['user_id'] != MENTAKO_USER_ID):
+                    if is_guest and (not meta or meta.get('user_id') != MENTAKO_USER_ID):
                         continue
-                    try:
-                        segs_data = json.loads(segs_json) if isinstance(segs_json, str) else segs_json
-                        if isinstance(segs_data, dict):
-                            segs_data = segs_data.get('segments', [])
-                        for seg in segs_data:
-                            text = seg.get('text', '')
-                            if q.lower() in text.lower():
-                                t = seg.get('start', 0)
-                                results.append({
-                                    'type': 'transcript',
-                                    'filename': filename,
-                                    'user_id': meta['user_id'] if meta else '',
-                                    'user_name': meta['user_name'] if meta else '',
-                                    'title': meta['title'] if meta else '',
-                                    'time': t,
-                                    'text': text.strip(),
-                                    '_abs_time': (meta['start_time'] if meta else 0) + t * 1000,
-                                })
-                    except Exception:
-                        pass
-
-            # --- コメント検索 ---
-            if search_type in ('all', 'comment'):
-                import datetime as _dt
-
-                # めんたこ専用 comments テーブル (datetime型)
-                cur.execute(
-                    'SELECT time, name, comment FROM comments WHERE comment LIKE %s ORDER BY time DESC LIMIT 200',
-                    (like_q,)
-                )
-                for comment_dt, uname, comment in cur.fetchall():
-                    ts_ms = comment_dt.timestamp() * 1000
-                    meta = None
-                    for m in reversed(sorted_by_start):
-                        if m['user_id'] == MENTAKO_USER_ID and m['start_time'] <= ts_ms:
-                            meta = m
-                            break
-                    rel = round((ts_ms - meta['start_time']) / 1000, 1) if meta else None
-                    results.append({
-                        'type': 'comment',
-                        'filename': meta['filename'] if meta else None,
-                        'user_id': MENTAKO_USER_ID,
-                        'user_name': uname,
-                        'title': meta['title'] if meta else '',
-                        'time': rel,
-                        'text': comment,
-                        '_abs_time': ts_ms,
-                    })
-
-                # 各ユーザーの live_comments_* テーブル (adminのみ)
-                if not is_guest:
-                    cur.execute("SHOW TABLES LIKE 'live_comments_%'")
-                    tables = [r[0] for r in cur.fetchall()]
-                    for table in tables:
-                        streamer_user_id = table[len('live_comments_'):]
-                        cur.execute(
-                            f'SELECT live_id, user_name, comment, comment_time FROM `{table}` WHERE comment LIKE %s ORDER BY comment_time DESC LIMIT 100',
-                            (like_q,)
-                        )
-                        for live_id, uname, comment, ctime in cur.fetchall():
+                    for seg in item['segments']:
+                        t = seg.get('start', 0)
+                        results.append({
+                            'type': 'transcript',
+                            'filename': filename,
+                            'user_id': meta['user_id'] if meta else '',
+                            'user_name': meta['user_name'] if meta else '',
+                            'title': meta['title'] if meta else '',
+                            'time': t,
+                            'text': seg.get('text', '').strip(),
+                            '_abs_time': (meta['start_time'] if meta else 0) + t * 1000,
+                        })
+            if search_type in ('all', 'comment') and not is_guest:
+                # ファイルベースライブコメント検索
+                try:
+                    q_lower = q.lower()
+                    for uid_dir in os.listdir(LIVE_COMMENTS_DIR):
+                        uid_path = os.path.join(LIVE_COMMENTS_DIR, uid_dir)
+                        if not os.path.isdir(uid_path):
+                            continue
+                        for fname in os.listdir(uid_path):
+                            if not fname.endswith('.json'):
+                                continue
+                            live_id = fname[:-5]
+                            with open(os.path.join(uid_path, fname)) as f:
+                                rows = json.load(f)
                             meta = by_live_id.get(live_id)
-                            rel = round(ctime - meta['start_time'] / 1000, 1) if meta else None
-                            results.append({
-                                'type': 'comment',
-                                'filename': meta['filename'] if meta else None,
-                                'user_id': streamer_user_id,
-                                'user_name': uname,
-                                'title': meta['title'] if meta else '',
-                                'time': rel,
-                                'text': comment,
-                                '_abs_time': ctime * 1000,
-                            })
+                            for r in rows:
+                                if q_lower not in r.get('comment', '').lower():
+                                    continue
+                                ctime = r.get('comment_time', 0)
+                                rel = round(ctime - meta['start_time'] / 1000, 1) if meta else None
+                                results.append({
+                                    'type': 'comment',
+                                    'filename': meta['filename'] if meta else None,
+                                    'user_id': uid_dir,
+                                    'user_name': r.get('user_name', ''),
+                                    'title': meta['title'] if meta else '',
+                                    'time': rel,
+                                    'text': r.get('comment', ''),
+                                    '_abs_time': ctime * 1000,
+                                })
+                except Exception as e:
+                    print(f'[SEARCH] file comment error: {e}')
+        else:
+            try:
+                conn = get_db()
+                cur = conn.cursor()
 
-            cur.close()
-            conn.close()
-        except Exception as e:
-            print(f'[SEARCH] error: {e}')
-            import traceback; traceback.print_exc()
+                # --- 字幕検索 ---
+                if search_type in ('all', 'transcript'):
+                    cur.execute('SELECT filename, segments FROM transcripts WHERE segments LIKE %s LIMIT 500', (like_q,))
+                    for filename, segs_json in cur.fetchall():
+                        meta = by_filename.get(filename)
+                        if is_guest and (not meta or meta['user_id'] != MENTAKO_USER_ID):
+                            continue
+                        try:
+                            segs_data = json.loads(segs_json) if isinstance(segs_json, str) else segs_json
+                            if isinstance(segs_data, dict):
+                                segs_data = segs_data.get('segments', [])
+                            for seg in segs_data:
+                                text = seg.get('text', '')
+                                if q.lower() in text.lower():
+                                    t = seg.get('start', 0)
+                                    results.append({
+                                        'type': 'transcript',
+                                        'filename': filename,
+                                        'user_id': meta['user_id'] if meta else '',
+                                        'user_name': meta['user_name'] if meta else '',
+                                        'title': meta['title'] if meta else '',
+                                        'time': t,
+                                        'text': text.strip(),
+                                        '_abs_time': (meta['start_time'] if meta else 0) + t * 1000,
+                                    })
+                        except Exception:
+                            pass
+
+                # --- コメント検索 ---
+                if search_type in ('all', 'comment'):
+                    import datetime as _dt
+                    cur.execute(
+                        'SELECT time, name, comment FROM comments WHERE comment LIKE %s ORDER BY time DESC LIMIT 200',
+                        (like_q,)
+                    )
+                    for comment_dt, uname, comment in cur.fetchall():
+                        ts_ms = comment_dt.timestamp() * 1000
+                        meta = None
+                        for m in reversed(sorted_by_start):
+                            if m['user_id'] == MENTAKO_USER_ID and m['start_time'] <= ts_ms:
+                                meta = m
+                                break
+                        rel = round((ts_ms - meta['start_time']) / 1000, 1) if meta else None
+                        results.append({
+                            'type': 'comment',
+                            'filename': meta['filename'] if meta else None,
+                            'user_id': MENTAKO_USER_ID,
+                            'user_name': uname,
+                            'title': meta['title'] if meta else '',
+                            'time': rel,
+                            'text': comment,
+                            '_abs_time': ts_ms,
+                        })
+                    if not is_guest:
+                        cur.execute("SHOW TABLES LIKE 'live_comments_%'")
+                        tables = [r[0] for r in cur.fetchall()]
+                        for table in tables:
+                            streamer_user_id = table[len('live_comments_'):]
+                            cur.execute(
+                                f'SELECT live_id, user_name, comment, comment_time FROM `{table}` WHERE comment LIKE %s ORDER BY comment_time DESC LIMIT 100',
+                                (like_q,)
+                            )
+                            for live_id, uname, comment, ctime in cur.fetchall():
+                                meta = by_live_id.get(live_id)
+                                rel = round(ctime - meta['start_time'] / 1000, 1) if meta else None
+                                results.append({
+                                    'type': 'comment',
+                                    'filename': meta['filename'] if meta else None,
+                                    'user_id': streamer_user_id,
+                                    'user_name': uname,
+                                    'title': meta['title'] if meta else '',
+                                    'time': rel,
+                                    'text': comment,
+                                    '_abs_time': ctime * 1000,
+                                })
+                cur.close()
+                conn.close()
+            except Exception as e:
+                print(f'[SEARCH] error: {e}')
+                import traceback; traceback.print_exc()
 
         results.sort(key=lambda r: (r.pop('_abs_time', 0)), reverse=True)
         self.send_json(results[:200])
@@ -2094,6 +2265,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ws_broadcast('clip_update')
 
     def handle_clip_comments_get(self, clip_filename):
+        if MYSQL_DISABLED:
+            comments = _file_get_clip_comments(clip_filename)
+            return self.send_json([{
+                'id': c['id'], 'author': c['author'], 'comment': c['comment'],
+                'createdAt': c.get('created_at', '')
+            } for c in comments])
         try:
             conn = get_db()
             cur = conn.cursor()
@@ -2112,12 +2289,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_json({'error': str(e)}, status=500)
 
     def handle_clip_comments_post(self, clip_filename, data):
-        author = data.get('author', '').strip()
+        author = data.get('author', '').strip() or 'Anonymous'
         comment = data.get('comment', '').strip()
         if not comment:
             return self.send_json({'error': 'Comment is required'}, status=400)
-        if not author:
-            author = 'Anonymous'
+        if MYSQL_DISABLED:
+            new = _file_add_clip_comment(clip_filename, author, comment)
+            return self.send_json({'success': True, 'id': new['id']})
         try:
             conn = get_db()
             cur = conn.cursor()
@@ -2135,6 +2313,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def handle_clip_comment_delete(self, comment_id):
         if not self.require_admin():
             return
+        if MYSQL_DISABLED:
+            ok = _file_delete_clip_comment(comment_id)
+            return self.send_json({'success': ok})
         try:
             cid = int(comment_id)
             conn = get_db()
