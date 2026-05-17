@@ -35,7 +35,7 @@ DISCORD_MAX_FILE_MB = 10
 # 空欄の場合は警報機能を無効化
 ALERT_KEYWORDS_RAW = os.environ.get("ALERT_KEYWORDS", "")
 ALERT_KEYWORDS = [k.strip() for k in ALERT_KEYWORDS_RAW.split(",") if k.strip()]
-ALERT_MESSAGE  = os.environ.get("ALERT_MESSAGE", "🚨警報🚨")
+ALERT_MESSAGE  = os.environ.get("ALERT_MESSAGE", "🚨")
 
 WEB_SERVER_URL = os.environ.get("WEB_SERVER_URL", "http://localhost:3001")
 PUBLIC_URL     = os.environ.get("PUBLIC_URL",     "https://mirrativ-record.saipi1129.com")
